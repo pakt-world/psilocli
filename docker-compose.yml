@@ -1,0 +1,95 @@
+services:
+  # ── OpenClaw / ZeroClaw LLM containers ─────────────────────────────────────
+  # These provide the LLM brain only. All Pakt platform integration is handled
+  # by the psilocli-* sidecars. Set OPENCLAW_IMAGE to your local image name.
+
+  agent-a:
+    image: ${OPENCLAW_IMAGE:-openclawubuntu:latest}
+    container_name: agent-a
+    command: /bin/sh -c "chown -R root:root /root/.openclaw/plugins && exec /usr/local/bin/start-openclaw-a2a.sh"
+    environment:
+      OPENCLAW_GATEWAY_PORT: "18789"
+      A2A_BRIDGE_PORT: "4120"
+      OPENCLAW_HOOKS_PATH: "/hooks"
+      OPENCLAW_HOOKS_TOKEN: "testtoken"
+      CUSTOM_BASE_URL: "https://api.anthropic.com"
+      CUSTOM_MODEL_ID: "${OPENCLAW_MODEL:-claude-sonnet-4-6}"
+      CUSTOM_COMPATIBILITY: "anthropic"
+      CUSTOM_API_KEY: "${ANTHROPIC_API_KEY}"
+      OPENCLAW_FORCE_ONBOARD: "false"
+      OPENCLAW_CHANNEL_PAKT_DISABLE: "1"   # psilocli handles this
+    ports:
+      - "8800:8080"
+      - "8801:80"
+    volumes:
+      - ./agents/agenta/claw:/root/.openclaw
+      - ./agents/agenta/a2a:/root/.a2a-bridges
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  agent-b:
+    image: ${OPENCLAW_IMAGE:-openclawubuntu:latest}
+    container_name: agent-b
+    command: /bin/sh -c "chown -R root:root /root/.openclaw/plugins && exec /usr/local/bin/start-openclaw-a2a.sh"
+    environment:
+      OPENCLAW_GATEWAY_PORT: "18789"
+      A2A_BRIDGE_PORT: "4120"
+      OPENCLAW_HOOKS_PATH: "/hooks"
+      OPENCLAW_HOOKS_TOKEN: "testtoken"
+      CUSTOM_BASE_URL: "https://api.anthropic.com"
+      CUSTOM_MODEL_ID: "${OPENCLAW_MODEL:-claude-sonnet-4-6}"
+      CUSTOM_COMPATIBILITY: "anthropic"
+      CUSTOM_API_KEY: "${ANTHROPIC_API_KEY}"
+      OPENCLAW_FORCE_ONBOARD: "false"
+      OPENCLAW_CHANNEL_PAKT_DISABLE: "1"
+    ports:
+      - "8802:8080"
+      - "8803:80"
+    volumes:
+      - ./agents/agentb/claw:/root/.openclaw
+      - ./agents/agentb/a2a:/root/.a2a-bridges
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ── Pakt agent sidecars ─────────────────────────────────────────────────────
+  # One per OpenClaw container. Handles WebSocket, escrow signing, scanning, reviews.
+  #
+  # Sandbox modes (SANDBOX_TYPE in agents/agenta/.env):
+  #   openclaw — docker exec into the LLM container (Docker socket required, works now)
+  #   hermes   — HTTP POST to channel-http plugin (uncomment HERMES_URL when ready)
+
+  psilocli-a:
+    build: .
+    container_name: psilocli-a
+    env_file: ./agents/agenta/.env
+    environment:
+      SANDBOX_TYPE: openclaw
+      OPENCLAW_CONTAINER: agent-a
+      # SANDBOX_TYPE: hermes
+      # HERMES_URL: http://agent-a:8080/invoke
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - agent-a
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  psilocli-b:
+    build: .
+    container_name: psilocli-b
+    env_file: ./agents/agentb/.env
+    environment:
+      SANDBOX_TYPE: openclaw
+      OPENCLAW_CONTAINER: agent-b
+      # SANDBOX_TYPE: hermes
+      # HERMES_URL: http://agent-b:8080/invoke
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - agent-b
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -1,0 +1,18 @@
+node_modules/
+
+# Real env files — never commit credentials
+agents/**/.env
+.env
+
+# Runtime state
+/tmp/daemon-*.json
+
+# Logs
+*.log
+
+# OpenClaw agent state directories (runtime data, not config)
+agents/*/claw/
+agents/*/a2a/
+
+# OS
+.DS_Store
