@@ -18,6 +18,11 @@ import { PsiloSDK, MessagingService } from '@pakt/psilo';
 
 const execFileAsync = promisify(execFile);
 
+// Detect CLI subcommand mode before any logging or config is set up.
+// Any non-flag first arg (except 'start') means one-shot CLI mode.
+const _firstArg   = process.argv[2] ?? '';
+const _isCliMode  = Boolean(_firstArg && !_firstArg.startsWith('-') && _firstArg !== 'start');
+
 // ── CLI argument parsing ───────────────────────────────────────────────────
 
 const { values: cli } = parseArgs({
@@ -98,6 +103,22 @@ META
   -h, --help                 Show this help
   -v, --version              Show version
 
+SUBCOMMANDS  (one-shot — exits after the command completes)
+  whoami                                                Show agent identity
+  balance [--chain <id>] [--token <0x>]                 Wallet balance
+  list jobs [--status <s>] [--limit <n>] [--role <r>]   List jobs
+  list invites                                          List received invites
+  apply <jobId> [--cover-letter <text>]                 Apply to a job
+  create-job --title <t> --amount <n> --invite <0x>     Create and fund a job
+  accept-invite <jobId> <inviteId>                      Accept a job invite
+  complete-job <jobId>                                  Execute and complete a job
+  release-payment <jobId>                               Release escrow to seller
+  review <jobId> --receiver <userId> [--rating n] [--text t]  Submit a review
+  send-message <userId> <text>                          Send a direct message
+
+  All subcommands accept --json for machine-readable JSON output on stdout.
+  Exit codes: 0 = success, 1 = error, 2 = usage error.
+
 EXAMPLES
   # Run with flags
   psilocli --name agent-a --key 0xABC --address 0xDEF --api-key sk-ant-...
@@ -108,6 +129,12 @@ EXAMPLES
   # Buyer mode — create a job and invite agent-b
   psilocli --name agent-a --key 0x... --address 0x... \\
     --invite-address 0xAGENT_B --job-title "Write a report" --job-amount 2
+
+  # One-shot subcommands
+  psilocli whoami
+  psilocli list jobs --status open --json
+  psilocli apply <jobId> --cover-letter "I can deliver this."
+  psilocli create-job --title "Write a report" --amount 2 --invite 0xAGENT
 `);
   process.exit(0);
 }
@@ -159,9 +186,12 @@ const _log   = console.log.bind(console);
 const _warn  = console.warn.bind(console);
 const _error = console.error.bind(console);
 const ts = () => new Date().toISOString().replace('T', ' ').slice(0, 23);
-console.log   = (...a) => _log(`[${ts()}]`,   ...a);
-console.warn  = (...a) => _warn(`[${ts()}]`,  ...a);
-console.error = (...a) => _error(`[${ts()}]`, ...a);
+// Timestamps only in daemon mode — CLI output should be clean.
+if (!_isCliMode) {
+  console.log   = (...a) => _log(`[${ts()}]`,   ...a);
+  console.warn  = (...a) => _warn(`[${ts()}]`,  ...a);
+  console.error = (...a) => _error(`[${ts()}]`, ...a);
+}
 
 // ── SDK result unwrap ──────────────────────────────────────────────────────
 
@@ -193,7 +223,7 @@ function saveReviewed() {
 }
 
 const reviewedJobs = loadReviewed();
-console.log(`[${agentName}] Loaded ${reviewedJobs.size} previously reviewed job(s) from disk`);
+if (!_isCliMode) console.log(`[${agentName}] Loaded ${reviewedJobs.size} previously reviewed job(s) from disk`);
 
 // ── Persistent applied-jobs dedup ─────────────────────────────────────────
 
@@ -216,7 +246,7 @@ function saveApplied() {
 }
 
 const appliedJobs = loadApplied();
-console.log(`[${agentName}] Loaded ${appliedJobs.size} previously applied job(s) from disk`);
+if (!_isCliMode) console.log(`[${agentName}] Loaded ${appliedJobs.size} previously applied job(s) from disk`);
 
 // ── Message dedup (in-memory, 30s TTL) ────────────────────────────────────
 
@@ -484,26 +514,33 @@ async function resolveUserIdByAddress(address) {
 
 // ── Buyer: create job + invite ─────────────────────────────────────────────
 
-async function createJobAndInvite(sdk, inviteeAddress) {
+async function createJobAndInvite(sdk, inviteeAddress, params = {}) {
+  const jobTitle       = params.title       ?? JOB_TITLE;
+  const jobDescription = params.description ?? JOB_DESCRIPTION;
+  const jobAmount      = params.amount      ?? JOB_AMOUNT;
+  const jobChainId     = params.chainId     ?? JOB_CHAIN_ID;
+  const jobAsset       = params.asset       ?? JOB_ASSET;
+  const jobDeliverable = params.deliverable ?? JOB_DELIVERABLE;
+
   console.log(`[${agentName}] Resolving user ID for invitee address: ${inviteeAddress}`);
   const inviteeUserId = await resolveUserIdByAddress(inviteeAddress);
   console.log(`[${agentName}] Invitee user ID: ${inviteeUserId}`);
 
-  const deliverables = JOB_DELIVERABLE
-    ? [{ name: JOB_DELIVERABLE }]
+  const deliverables = jobDeliverable
+    ? [{ name: jobDeliverable }]
     : [];
 
   const createDto = {
-    title:       JOB_TITLE,
-    description: JOB_DESCRIPTION,
-    amount:      JOB_AMOUNT,
-    chainId:     JOB_CHAIN_ID,
-    ...(JOB_ASSET ? { asset: JOB_ASSET } : {}),
+    title:       jobTitle,
+    description: jobDescription,
+    amount:      jobAmount,
+    chainId:     jobChainId,
+    ...(jobAsset ? { asset: jobAsset } : {}),
     deliverables,
   };
 
   // ── Step 1: Create job record ──────────────────────────────────────────────
-  console.log(`[${agentName}] Creating job: "${JOB_TITLE}"`);
+  console.log(`[${agentName}] Creating job: "${jobTitle}"`);
   const createData = sdkOk(await sdk.job.create(createDto), 'job.create');
   const job    = createData?.job ?? createData;
   const jobId  = String(job._id);
@@ -571,7 +608,8 @@ async function createJobAndInvite(sdk, inviteeAddress) {
     console.log(`[${agentName}] confirmTx onInvite — txHash: ${txHash}`);
   }
 
-  console.log(`[${agentName}] Invite sent to ${inviteeAddress} for job "${JOB_TITLE}" (${jobId})`);
+  console.log(`[${agentName}] Invite sent to ${inviteeAddress} for job "${jobTitle}" (${jobId})`);
+  return { jobId, inviteeAddress, inviteeUserId };
 }
 
 // ── Job execution ──────────────────────────────────────────────────────────
@@ -647,7 +685,8 @@ async function _runJob(sdk, messaging, jobId) {
     console.log(`[${agentName}] Response (preview): ${response?.slice(0, 120)}`);
 
     // If the deliverable asks to message the buyer, send the reply via chat.
-    if (isMessagingDeliverable(deliverable)) {
+    // messaging may be null in CLI mode — skip gracefully.
+    if (isMessagingDeliverable(deliverable) && messaging) {
       const creatorId = String(job.creator?._id ?? job.creator ?? '');
       if (creatorId) {
         try {
@@ -833,6 +872,332 @@ async function handleJobInvite(sdk, messaging, invite) {
   } catch (err) {
     console.error(`[${agentName}] handleJobInvite failed:`, err.message);
   }
+}
+
+// ── CLI subcommands ────────────────────────────────────────────────────────
+
+const CLI_VERBS = new Set([
+  'whoami', 'balance', 'list', 'apply', 'create-job',
+  'accept-invite', 'complete-job', 'release-payment', 'review', 'send-message',
+]);
+
+async function cliInit() {
+  const sdk = await PsiloSDK.init({ baseUrl: PAKTSUITE_URL });
+  const jwt = await sdk.auth.paktWeb3Login(agentKey);
+  const userId = decodeUserId(jwt);
+  sdk.setAuthorizationHeader(jwt);
+  return { sdk, userId, jwt };
+}
+
+function cliTable(rows, headers) {
+  const widths = headers.map((h, i) =>
+    Math.max(h.length, ...rows.map(r => String(r[i] ?? '').length))
+  );
+  const fmt = (cells) => cells.map((c, i) => String(c ?? '').padEnd(widths[i])).join('  ');
+  _log(fmt(headers));
+  _log(widths.map(w => '-'.repeat(w)).join('  '));
+  for (const row of rows) _log(fmt(row));
+}
+
+async function runCLI() {
+  const verb   = process.argv[2];
+  const isJson = process.argv.includes('--json');
+
+  // In JSON mode redirect informational console.log to stderr so stdout is pure JSON.
+  if (isJson) console.log = console.error;
+
+  function out(data) {
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+  }
+  function fail(msg, code = 1) {
+    process.stderr.write(`Error: ${msg}\n`);
+    process.exit(code);
+  }
+
+  if (!CLI_VERBS.has(verb)) {
+    fail(`Unknown subcommand "${verb}". Run psilocli --help for usage.`, 2);
+  }
+
+  const { sdk, userId, jwt } = await cliInit();
+
+  // ── whoami ─────────────────────────────────────────────────────────────────
+  if (verb === 'whoami') {
+    const data = { name: agentName, address: agentAddress, userId };
+    if (isJson) {
+      out(data);
+    } else {
+      _log(`Name:    ${data.name}`);
+      _log(`Address: ${data.address}`);
+      _log(`User ID: ${data.userId}`);
+    }
+    return;
+  }
+
+  // ── balance ────────────────────────────────────────────────────────────────
+  if (verb === 'balance') {
+    const { values: flags } = parseArgs({
+      args: process.argv.slice(3),
+      options: {
+        chain: { type: 'string' },
+        token: { type: 'string' },
+      },
+      strict: false,
+    });
+    const chainId  = flags.chain ?? '43113';
+    const rpcUrl   = RPC_URLS[chainId];
+    if (!rpcUrl) fail(`No RPC URL configured for chain ${chainId}`);
+    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const raw      = await provider.getBalance(agentAddress);
+    const result   = {
+      native: { chain: chainId, symbol: NATIVE_SYMBOLS[chainId] ?? 'native', balance: ethers.formatEther(raw) },
+    };
+    if (flags.token) {
+      const { formatted, symbol } = await readTokenBalance(flags.token, chainId, agentAddress);
+      result.token = { address: flags.token, symbol, balance: formatted };
+    }
+    if (isJson) {
+      out(result);
+    } else {
+      _log(`${result.native.symbol}: ${result.native.balance}`);
+      if (result.token) _log(`${result.token.symbol} (${result.token.address}): ${result.token.balance}`);
+    }
+    return;
+  }
+
+  // ── list jobs / list invites ───────────────────────────────────────────────
+  if (verb === 'list') {
+    const sub = process.argv[3];
+
+    if (sub === 'jobs') {
+      const { values: flags } = parseArgs({
+        args: process.argv.slice(4),
+        options: {
+          status: { type: 'string' },
+          limit:  { type: 'string' },
+          role:   { type: 'string' },
+        },
+        strict: false,
+      });
+      const status   = flags.status ?? 'open';
+      const limit    = parseInt(flags.limit ?? '20', 10);
+      const listOpts = { status, limit, ...(flags.role ? { role: flags.role } : {}) };
+      const result   = sdkOk(await sdk.job.list(listOpts), 'job.list');
+      const jobs     = result?.data ?? (Array.isArray(result) ? result : []);
+      if (isJson) {
+        out(jobs);
+      } else if (jobs.length === 0) {
+        _log('No jobs found.');
+      } else {
+        cliTable(
+          jobs.map(j => [
+            String(j._id).slice(-8),
+            (j.title ?? '').slice(0, 40),
+            j.status ?? '',
+            String(j.amount ?? ''),
+            j.currency?.symbol ?? 'AVAX',
+          ]),
+          ['ID', 'Title', 'Status', 'Amount', 'Token']
+        );
+      }
+      return;
+    }
+
+    if (sub === 'invites') {
+      const { data: inviteList } = await sdk.job.listAllInvites();
+      const invites = inviteList?.data ?? [];
+      if (isJson) {
+        out(invites);
+      } else if (invites.length === 0) {
+        _log('No invites found.');
+      } else {
+        cliTable(
+          invites.map(i => [
+            String(i._id).slice(-8),
+            (i.job?.title ?? '').slice(0, 40),
+            i.direction ?? '',
+            i.status ?? '',
+            String(i.sender?._id ?? '').slice(-8),
+          ]),
+          ['ID', 'Job Title', 'Dir', 'Status', 'From']
+        );
+      }
+      return;
+    }
+
+    process.stderr.write('Usage: psilocli list jobs | psilocli list invites\n');
+    process.exit(2);
+  }
+
+  // ── apply ──────────────────────────────────────────────────────────────────
+  if (verb === 'apply') {
+    const { values: flags, positionals } = parseArgs({
+      args: process.argv.slice(3),
+      options: { 'cover-letter': { type: 'string' } },
+      allowPositionals: true,
+      strict: false,
+    });
+    const jobId = positionals[0];
+    if (!jobId) fail('Usage: psilocli apply <jobId> [--cover-letter "..."]', 2);
+    const coverLetter = flags['cover-letter'] ??
+      'I am well-suited for this role and ready to deliver promptly and professionally.';
+    const applyTimeout = new Promise((_, r) =>
+      setTimeout(() => r(new Error('apply timed out after 30s')), 30_000)
+    );
+    const data = sdkOk(
+      await Promise.race([sdk.job.apply(jobId, { coverLetter }), applyTimeout]),
+      'job.apply'
+    );
+    if (isJson) out({ ok: true, jobId, data });
+    else _log(`Applied to job ${jobId}`);
+    return;
+  }
+
+  // ── create-job ─────────────────────────────────────────────────────────────
+  if (verb === 'create-job') {
+    const { values: flags } = parseArgs({
+      args: process.argv.slice(3),
+      options: {
+        title:       { type: 'string' },
+        description: { type: 'string' },
+        amount:      { type: 'string' },
+        'chain-id':  { type: 'string' },
+        asset:       { type: 'string' },
+        deliverable: { type: 'string' },
+        invite:      { type: 'string' },
+      },
+      strict: false,
+    });
+    const inviteeAddress = flags.invite ?? INVITE_AGENT_ADDRESS;
+    if (!inviteeAddress) fail('--invite <address> is required (or set INVITE_AGENT_ADDRESS)', 2);
+    const title = flags.title ?? JOB_TITLE;
+    if (!title) fail('--title is required (or set JOB_TITLE)', 2);
+    const result = await createJobAndInvite(sdk, inviteeAddress, {
+      title:       title,
+      description: flags.description,
+      amount:      flags.amount,
+      chainId:     flags['chain-id'],
+      asset:       flags.asset,
+      deliverable: flags.deliverable,
+    });
+    if (isJson) out({ ok: true, ...result });
+    return;
+  }
+
+  // ── accept-invite ──────────────────────────────────────────────────────────
+  if (verb === 'accept-invite') {
+    const { positionals } = parseArgs({
+      args: process.argv.slice(3),
+      options: {},
+      allowPositionals: true,
+      strict: false,
+    });
+    const [jobId, inviteId] = positionals;
+    if (!jobId || !inviteId) fail('Usage: psilocli accept-invite <jobId> <inviteId>', 2);
+    const acceptData = sdkOk(await sdk.job.acceptInvite(jobId, inviteId), 'acceptInvite');
+    let txHash = null;
+    if (acceptData?.acceptPayload) {
+      txHash = await signAndBroadcast(acceptData.acceptPayload);
+      sdkOk(await sdk.job.confirmTx(jobId, { step: 'onAccept', txHash }), 'confirmTx onAccept');
+    }
+    if (isJson) out({ ok: true, jobId, inviteId, txHash });
+    else _log(txHash
+      ? `Accepted invite ${inviteId} — txHash: ${txHash}`
+      : `Accepted invite ${inviteId} (off-chain)`
+    );
+    return;
+  }
+
+  // ── complete-job ───────────────────────────────────────────────────────────
+  // Runs full LLM execution. Messaging deliverables are skipped (no WebSocket in CLI mode).
+  if (verb === 'complete-job') {
+    const { positionals } = parseArgs({
+      args: process.argv.slice(3),
+      options: {},
+      allowPositionals: true,
+      strict: false,
+    });
+    const jobId = positionals[0];
+    if (!jobId) fail('Usage: psilocli complete-job <jobId>', 2);
+    await executeJob(sdk, null, jobId);
+    if (isJson) out({ ok: true, jobId });
+    else _log(`Job ${jobId} complete`);
+    return;
+  }
+
+  // ── release-payment ────────────────────────────────────────────────────────
+  if (verb === 'release-payment') {
+    const { positionals } = parseArgs({
+      args: process.argv.slice(3),
+      options: {},
+      allowPositionals: true,
+      strict: false,
+    });
+    const jobId = positionals[0];
+    if (!jobId) fail('Usage: psilocli release-payment <jobId>', 2);
+    const releaseData    = sdkOk(await sdk.job.releasePayment(jobId), 'releasePayment');
+    const releasePayload = releaseData?.releasePayload;
+    if (!releasePayload) fail('No releasePayload returned — job may not be in review status');
+    const txHash = await signAndBroadcast(releasePayload);
+    await new Promise(r => setTimeout(r, 8_000));
+    sdkOk(await sdk.job.confirmTx(jobId, { step: 'onRelease', txHash }), 'confirmTx onRelease');
+    if (isJson) out({ ok: true, jobId, txHash });
+    else _log(`Payment released — txHash: ${txHash}`);
+    return;
+  }
+
+  // ── review ─────────────────────────────────────────────────────────────────
+  if (verb === 'review') {
+    const { values: flags, positionals } = parseArgs({
+      args: process.argv.slice(3),
+      options: {
+        receiver: { type: 'string' },
+        rating:   { type: 'string' },
+        text:     { type: 'string' },
+      },
+      allowPositionals: true,
+      strict: false,
+    });
+    const jobId = positionals[0];
+    if (!jobId) fail('Usage: psilocli review <jobId> --receiver <userId> [--rating 1-5] [--text "..."]', 2);
+    const receiverId = flags.receiver;
+    if (!receiverId) fail('--receiver <userId> is required', 2);
+    const rating     = Math.min(5, Math.max(1, parseInt(flags.rating ?? '5', 10)));
+    const review     = flags.text ?? 'Great experience. Delivered as promised.';
+    const reviewData = sdkOk(
+      await sdk.job.submitReview(jobId, { receiverId, review, rating }),
+      'submitReview'
+    );
+    if (isJson) out({ ok: true, reviewId: reviewData?._id });
+    else _log(`Review submitted — ${rating}/5 — id: ${reviewData?._id}`);
+    return;
+  }
+
+  // ── send-message ───────────────────────────────────────────────────────────
+  if (verb === 'send-message') {
+    const { positionals } = parseArgs({
+      args: process.argv.slice(3),
+      options: {},
+      allowPositionals: true,
+      strict: false,
+    });
+    const receiverId = positionals[0];
+    const text       = positionals.slice(1).join(' ');
+    if (!receiverId || !text) fail('Usage: psilocli send-message <userId> <text>', 2);
+    const messaging = new MessagingService(PAKTSUITE_URL, jwt);
+    await messaging.connect();
+    const convo = await Promise.race([
+      messaging.createDirectConversation(receiverId),
+      new Promise((_, r) => setTimeout(() => r(new Error('createDirectConversation timed out')), 10_000)),
+    ]);
+    messaging.sendMessage({ conversationId: convo._id, type: 'TEXT', message: text });
+    await new Promise(r => setTimeout(r, 1_500));
+    try { messaging.disconnect(); } catch {}
+    if (isJson) out({ ok: true, conversationId: convo._id });
+    else _log(`Message sent (conversation: ${convo._id})`);
+    return;
+  }
+
+  fail(`Unhandled subcommand "${verb}"`, 2);
 }
 
 // ── Main loop (auto-reconnect) ─────────────────────────────────────────────
@@ -1295,4 +1660,15 @@ async function run() {
   }
 }
 
-run();
+// ── Entry point ────────────────────────────────────────────────────────────
+// One-shot CLI subcommand → runCLI + exit.
+// No subcommand, 'start', or flags-only → daemon mode.
+
+if (_isCliMode) {
+  runCLI().then(() => process.exit(0)).catch(err => {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  });
+} else {
+  run();
+}
