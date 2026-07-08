@@ -318,18 +318,23 @@ async function scanAndApply(sdk, currentUserId) {
     try {
       coverLetter = await generateReply(prompt);
     } catch (err) {
-      console.log(`[${agentName}] [SCAN] Cover letter generation failed for "${job.title}", using default`);
+      console.error(`[${agentName}] [SCAN] Cover letter generation failed for "${job.title}", using default:`, err.message);
     }
 
     try {
-      sdkOk(await sdk.job.apply(jobId, { coverLetter }), 'job.apply');
+      const applyTimeout = new Promise((_, r) => setTimeout(() => r(new Error('job.apply timed out after 30s')), 30_000));
+      sdkOk(await Promise.race([sdk.job.apply(jobId, { coverLetter }), applyTimeout]), 'job.apply');
       appliedJobs.add(jobId);
       saveApplied();
       console.log(`[${agentName}] [SCAN] Applied to "${job.title}" (${jobId})`);
     } catch (err) {
-      // 400 "already applied" — add to set so we skip it next scan
-      if (err.message?.includes('already applied')) appliedJobs.add(jobId);
-      else console.error(`[${agentName}] [SCAN] Apply to "${job.title}" failed:`, err.message);
+      // Any 400 is a permanent rejection — skip on future scans regardless of message
+      if (err.message?.includes('status code 400') || err.message?.includes('already applied')) {
+        appliedJobs.add(jobId);
+        saveApplied();
+      } else {
+        console.error(`[${agentName}] [SCAN] Apply to "${job.title}" failed:`, err.message);
+      }
     }
   }
 }
@@ -414,27 +419,34 @@ async function callAnthropic(message) {
   }
 }
 
+// Serialize all openclaw calls — concurrent docker execs share the same session file
+// and cause EmbeddedAttemptSessionTakeoverError.
+let _openClawQueue = Promise.resolve();
+
 async function callOpenClaw(message) {
-  const container = process.env.OPENCLAW_CONTAINER;
-  if (!container) throw new Error('OPENCLAW_CONTAINER is required for openclaw sandbox');
-  const { stdout, stderr } = await execFileAsync(
-    'docker',
-    ['exec', '-e', 'OPENCLAW_CHANNEL_PAKT_DISABLE=1', container,
-     'openclaw', 'agent', '--message', message, '--agent', 'main', '--json'],
-    { timeout: 90_000 }
-  );
-  const output = stdout || stderr;
-  let parsed;
-  try { parsed = JSON.parse(output); } catch { parsed = null; }
-  return (
-    parsed?.result?.payloads?.[0]?.text ??
-    parsed?.result?.payloads?.[0]?.content ??
-    parsed?.payloads?.[0]?.text ??
-    parsed?.payloads?.[0]?.content ??
-    parsed?.text ??
-    parsed?.content ??
-    output.slice(0, 500)
-  );
+  const run = async () => {
+    const container = process.env.OPENCLAW_CONTAINER;
+    if (!container) throw new Error('OPENCLAW_CONTAINER is required for openclaw sandbox');
+    const args = ['exec', '-e', 'OPENCLAW_CHANNEL_PAKT_DISABLE=1', container,
+      'openclaw', 'agent', '--message', message, '--agent', 'main', '--json', '--local'];
+    if (process.env.OPENCLAW_LOCAL_MODEL) args.push('--model', process.env.OPENCLAW_LOCAL_MODEL);
+    const { stdout, stderr } = await execFileAsync('docker', args, { timeout: 90_000 });
+    const output = stdout || stderr;
+    let parsed;
+    try { parsed = JSON.parse(output); } catch { parsed = null; }
+    return (
+      parsed?.result?.payloads?.[0]?.text ??
+      parsed?.result?.payloads?.[0]?.content ??
+      parsed?.payloads?.[0]?.text ??
+      parsed?.payloads?.[0]?.content ??
+      parsed?.text ??
+      parsed?.content ??
+      output.slice(0, 500)
+    );
+  };
+  const next = _openClawQueue.then(run, run);
+  _openClawQueue = next.catch(() => {});
+  return next;
 }
 
 async function callHermes(message) {

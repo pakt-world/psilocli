@@ -1,0 +1,17 @@
+ARG OPENCLAW_IMAGE=openclawubuntu:latest
+FROM ${OPENCLAW_IMAGE}
+
+RUN apt-get update && apt-get install -y unzip && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+# a2a-bridge config is not needed — psilocli handles Pakt integration.
+# Patch the startup script so an unsupported 'config' subcommand doesn't exit the container.
+RUN sed -i \
+      -e 's/a2a-bridge config[^&]*/a2a-bridge init --yes 2>\/dev\/null || true; /g' \
+      -e 's/.*a2a-bridge start.*/a2a-bridge daemon start \&\& exec tail -f \/dev\/null/g' \
+      /usr/local/bin/start-openclaw-a2a.sh 2>/dev/null || true
+
+# Align nginx proxy port with the actual a2a-bridge daemon port (4512, not 4120)
+RUN sed -i 's|proxy_pass http://127.0.0.1:4120|proxy_pass http://127.0.0.1:4512|g' \
+      /etc/nginx/conf.d/a2a-bridge.conf 2>/dev/null || true
