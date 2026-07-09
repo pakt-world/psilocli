@@ -47,10 +47,10 @@ After editing SDK source, rebuild AND copy both dist files:
 ```sh
 cd /Users/jendorski/Documents/Pakt/PsiloSDK
 npm run build
-cp dist/main.js  /Users/jendorski/Documents/Pakt/openC/agent-daemon/node_modules/@pakt/psilo/dist/main.js
-cp dist/main.mjs /Users/jendorski/Documents/Pakt/openC/agent-daemon/node_modules/@pakt/psilo/dist/main.mjs
-cp dist/main.js.map  /Users/jendorski/Documents/Pakt/openC/agent-daemon/node_modules/@pakt/psilo/dist/main.js.map
-cp dist/main.mjs.map /Users/jendorski/Documents/Pakt/openC/agent-daemon/node_modules/@pakt/psilo/dist/main.mjs.map
+cp dist/main.js     /Users/jendorski/Documents/Pakt/psilocli/node_modules/@pakt/psilo/dist/main.js
+cp dist/main.js.map /Users/jendorski/Documents/Pakt/psilocli/node_modules/@pakt/psilo/dist/main.js.map
+cp dist/main.mjs     /Users/jendorski/Documents/Pakt/psilocli/node_modules/@pakt/psilo/dist/main.mjs
+cp dist/main.mjs.map /Users/jendorski/Documents/Pakt/psilocli/node_modules/@pakt/psilo/dist/main.mjs.map
 ```
 Node ESM resolves `.mjs` — failing to copy it means old SDK code runs silently.
 
@@ -128,8 +128,8 @@ submitReview(seller)
 sdk.job.list({ status: 'open', limit: 20 })
   filter: not own job, not receiver, not already applied/invited
   for each eligible job:
-    LLM → cover letter
-    sdk.job.apply(jobId, { coverLetter })
+    LLM → cover letter  (serialized through _openClawQueue for openclaw sandbox)
+    sdk.job.apply(jobId, { coverLetter })  — 30 s timeout
     appliedJobs.add(jobId) → saved to disk
 ```
 
@@ -191,6 +191,7 @@ All options available as CLI flags (`--flag`) or env vars. Flags take precedence
 | `--auth-token` | `CLAUDE_AUTH_TOKEN` | | alt to api-key |
 | `--model` | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | |
 | `--openclaw-container` | `OPENCLAW_CONTAINER` | | ✅ (openclaw) |
+| `--openclaw-model` | `OPENCLAW_LOCAL_MODEL` | | ✅ (openclaw) |
 | `--hermes-url` | `HERMES_URL` | | ✅ (hermes) |
 | `--invite-address` | `INVITE_AGENT_ADDRESS` | | |
 | `--job-title` | `JOB_TITLE` | `Agent-to-Agent Task` | |
@@ -208,9 +209,8 @@ All options available as CLI flags (`--flag`) or env vars. Flags take precedence
 ```sh
 # Setup
 cp agents/agenta/.env.example agents/agenta/.env
-# fill in AGENT_PRIVATE_KEY, AGENT_ADDRESS, ANTHROPIC_API_KEY
+# fill in AGENT_PRIVATE_KEY, AGENT_ADDRESS, PAKTSUITE_URL
 
-cd agent-daemon
 ./start-daemon.sh both start
 ./start-daemon.sh both status
 tail -f /tmp/daemon-agent-a.log /tmp/daemon-agent-b.log
@@ -222,30 +222,43 @@ tail -f /tmp/daemon-agent-a.log /tmp/daemon-agent-b.log
 # Setup
 cp agents/agenta/.env.example agents/agenta/.env
 cp agents/agentb/.env.example agents/agentb/.env
+# Configure LLM provider in root .env (see README → Root .env for Docker)
 
-docker compose -f docker-compose-psilo-agents.yml up --build
+docker compose up --build
 docker logs -f psilocli-a
 docker logs -f psilocli-b
 ```
 
 ### CLI (global install)
 ```sh
-cd agent-daemon && npm link
+npm link
 psilocli --help
-psilocli --name agent-a --key 0x... --address 0x... --api-key sk-ant-...
+psilocli --name agent-a --key 0x... --address 0x... \
+  --sandbox openclaw --openclaw-container agent-a \
+  --openclaw-model openai/gpt-4o
 ```
 
 ---
 
 ## LLM Sandbox Backends
 
-### anthropic (default)
+### anthropic
 Calls Anthropic API directly. Retries up to 4× on 429.
 Requires `ANTHROPIC_API_KEY` or `CLAUDE_AUTH_TOKEN`.
 
 ### openclaw
-Calls `docker exec <container> openclaw agent --message <msg> --agent main --json`.
-The target container must be running OpenClaw. Docker CLI must be on PATH (included in the Docker image).
+Runs `docker exec <OPENCLAW_CONTAINER> openclaw agent --message <msg> --agent main --json --local --model <OPENCLAW_LOCAL_MODEL>`.
+
+All calls are serialized through `_openClawQueue` (a chained Promise queue) to prevent `EmbeddedAttemptSessionTakeoverError` from concurrent processes writing to the same session file.
+
+`OPENCLAW_LOCAL_MODEL` format: `<compatibility>/<model-id>` — e.g. `openai/gpt-4o`, `anthropic/claude-sonnet-4-6`.
+
+The LLM provider must be configured in the OpenClaw container's `openclaw.json`:
+- The provider key (`openai`, `anthropic`, etc.) must match `AGENT_*_LLM_COMPAT`
+- `baseUrl` must be a plain URL string matching `AGENT_*_LLM_BASE_URL`
+- `apiKey` uses SecretRef: `{"source": "env", "provider": "default", "id": "CUSTOM_API_KEY"}`
+
+Switching providers requires updating both the root `.env` (`AGENT_*_LLM_*`) and the pre-seeded `agents/agent*/claw/openclaw.json`.
 
 ### hermes
 `POST ${HERMES_URL}/invoke` with `{ message: string }`.
@@ -258,13 +271,18 @@ Use this when OpenClaw/ZeroClaw exposes an HTTP endpoint (channel-http plugin).
 
 | Path | Purpose |
 |---|---|
-| `agent-daemon/channel-pakt-daemon.mjs` | The daemon — entry point |
-| `agent-daemon/start-daemon.sh` | Host launcher (nohup + disown) |
-| `agent-daemon/Dockerfile` | Docker image for the daemon |
-| `agent-daemon/package.json` | deps + `bin.psilocli` |
-| `docker-compose-psilo-agents.yml` | Full stack: openclaw + psilocli sidecars |
+| `channel-pakt-daemon.mjs` | The daemon — entry point |
+| `start-daemon.sh` | Host launcher (nohup + disown, requires bash) |
+| `Dockerfile` | Docker image for the psilocli daemon |
+| `Dockerfile.openclaw` | Extends the OpenClaw image: installs bun, patches startup script and nginx port |
+| `docker-compose.yml` | Full stack: openclaw containers + psilocli sidecars |
+| `package.json` | deps + `bin.psilocli` |
+| `agents/agenta/.env` | Agent-A runtime config (gitignored) |
+| `agents/agentb/.env` | Agent-B runtime config (gitignored) |
 | `agents/agenta/.env.example` | Agent-A config template |
 | `agents/agentb/.env.example` | Agent-B config template |
+| `agents/agenta/claw/openclaw.json` | Pre-seeded OpenClaw config for agent-a (provider, apiKey SecretRef) |
+| `agents/agentb/claw/openclaw.json` | Pre-seeded OpenClaw config for agent-b |
 | `PsiloSDK/src/` | SDK source — edit here, then rebuild + copy dist |
 | `paktsuite-v2/src/event/listeners/socket.listener.ts` | Server socket event emitters |
 | `paktsuite-v2/src/api/v1/job/job.service.ts` | Job business logic + escrow flow |
@@ -283,8 +301,22 @@ Env file not loaded or missing the key. Run `./start-daemon.sh agent-a status` t
 const tx = { ...payload, chainId: payload.chainId ?? fallbackChainId };
 ```
 
-### `messaging.onJobCompleted is not a function`
+### `messaging.onPaymentReleased is not a function`
 Node ESM is loading old `dist/main.mjs`. Rebuild SDK and copy both `.js` and `.mjs` files.
+
+### `EmbeddedAttemptSessionTakeoverError`
+Two `openclaw agent` calls ran concurrently and raced over the same session file.
+Fixed by the `_openClawQueue` serial Promise chain in `callOpenClaw`. If you see it again, check nothing else is running `docker exec <container> openclaw agent` concurrently with the daemon.
+
+### `GatewayCredentialsRequiredError`
+OpenClaw gateway requires WebSocket credentials. The daemon uses `--local` flag to bypass the gateway entirely — ensure the `callOpenClaw` function includes `--local` in the args array.
+
+### `chown: cannot access '/root/.openclaw/plugins'`
+The volume mount was empty on first start. Fixed by adding `mkdir -p /root/.openclaw/plugins` to the docker-compose `command:` before `start-openclaw-a2a.sh`.
+
+### `authentication_error: Invalid authentication credentials` on LLM calls
+The API key in `CUSTOM_API_KEY` (root `.env` → `AGENT_*_LLM_API_KEY`) is wrong or expired.
+Note: OAuth access tokens (e.g. `sk-ant-oat01-…`) are rejected by the Anthropic API — use a proper API key.
 
 ### `currency: Path 'currency' is required`
 Job created without ERC-20 asset — `coinData` is null. The server fix uses fallback chain:
@@ -294,9 +326,6 @@ currency: coinData?.symbol ?? coinData?.reference ?? (typeof data.asset === 'str
 
 ### `BSONTypeError: new Types.ObjectId("undefined")`
 SDK `parseUrlWithQuery` passed a literal `"undefined"` string in the query. Fixed in `PsiloSDK/src/utils/response.ts` — rebuild SDK.
-
-### `401 Invalid authentication credentials` on LLM calls
-`CLAUDE_AUTH_TOKEN` has expired. Switch to `ANTHROPIC_API_KEY` in the `.env` file.
 
 ### Agent applies to its own job
 `creator !== currentUserId` check in `scanAndApply` uses the JWT-decoded `userId`. Verify `decodeUserId(jwt)` returns the correct MongoDB `_id`.

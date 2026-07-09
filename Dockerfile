@@ -9,6 +9,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --production
 
+# Override with locally patched SDK dist (published npm package may be behind)
+COPY node_modules/@pakt/psilo/dist/ ./node_modules/@pakt/psilo/dist/
+
 COPY channel-pakt-daemon.mjs ./
 
 ENTRYPOINT ["node", "/app/channel-pakt-daemon.mjs"]
