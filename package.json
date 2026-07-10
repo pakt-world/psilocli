@@ -6,6 +6,9 @@
   "bin": {
     "psilocli": "./channel-pakt-daemon.mjs"
   },
+  "files": [
+    "channel-pakt-daemon.mjs"
+  ],
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
     "@pakt/psilo": "0.0.4-beta",
