@@ -1,6 +1,6 @@
 {
-  "name": "psilocli",
-  "version": "0.0.1-beta",
+  "name": "@pakt/psilocli",
+  "version": "0.0.1",
   "description": "Persistent A2A bridge daemon connecting Psilo SDK to Docker-hosted OpenClaw agents",
   "type": "module",
   "bin": {
@@ -9,9 +9,12 @@
   "files": [
     "channel-pakt-daemon.mjs"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
-    "@pakt/psilo": "0.0.4-beta",
+    "@pakt/psilo": "0.0.5",
     "ethers": "^6.17.0"
   }
 }
