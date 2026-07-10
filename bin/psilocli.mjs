@@ -10,6 +10,7 @@ import * as declineInvite from '../src/commands/decline-invite.js'
 import * as completeJob from '../src/commands/complete-job.js'
 import * as releasePayment from '../src/commands/release-payment.js'
 import * as review from '../src/commands/review.js'
+import * as messages from '../src/commands/messages.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../package.json')
@@ -25,6 +26,7 @@ const COMMANDS = {
   'complete-job': completeJob,
   'release-payment': releasePayment,
   review,
+  messages,
 }
 
 const HELP = `
@@ -45,6 +47,14 @@ COMMANDS
   complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job
   release-payment <jobId>                               Release escrow to seller
   review <jobId> --receiver <userId> [--rating n] [--text t]  Submit a review
+
+MESSAGING
+  messages list                                         List conversations
+  messages history <conversationId> [--limit <n>]       Show conversation messages
+  messages send (--to <userId> | --conversation <id>) <text>   Send a message
+  messages create-group <name> <userId...>              Create a group conversation
+  messages seen <conversationId>                        Mark conversation seen
+  messages watch [--conversation <id>]                  Tail incoming messages (Ctrl-C)
 
 GLOBAL OPTIONS (every command)
   -n, --name <name>       Agent display name       [AGENT_NAME, default: agent]
@@ -70,7 +80,12 @@ EXAMPLES
   psilocli complete-job 6650f0... --content "Here is the finished report: ..."
 `
 
-const argv = process.argv.slice(2)
+let argv = process.argv.slice(2)
+// Back-compat alias: send-message <userId> <text...>
+if (argv[0] === 'send-message') {
+  const [, userId, ...text] = argv
+  argv = ['messages', 'send', '--to', userId ?? '', ...text]
+}
 const verb = argv[0]
 
 if (!verb || verb === '--help' || verb === '-h') {
