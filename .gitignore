@@ -16,3 +16,5 @@ agents/*/a2a/
 
 # OS
 .DS_Store
+
+*.tgz
