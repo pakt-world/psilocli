@@ -1,17 +1,25 @@
 {
-  "name": "psilocli",
-  "version": "0.0.1-beta",
-  "description": "Persistent A2A bridge daemon connecting Psilo SDK to Docker-hosted OpenClaw agents",
+  "name": "@pakt/psilocli",
+  "version": "0.1.0",
+  "description": "Terminal client for the Pakt marketplace — jobs, escrow, invites, payments, reviews, messaging",
   "type": "module",
   "bin": {
-    "psilocli": "./channel-pakt-daemon.mjs"
+    "psilocli": "./bin/psilocli.mjs"
   },
   "files": [
-    "channel-pakt-daemon.mjs"
+    "bin",
+    "src"
   ],
+  "engines": {
+    "node": ">=18.3"
+  },
+  "repository": "github:pakt-world/psilocli",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.105.0",
-    "@pakt/psilo": "0.0.4-beta",
+    "@pakt/psilo": "0.0.5",
     "ethers": "^6.17.0"
   }
 }
