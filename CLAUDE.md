@@ -3,7 +3,7 @@
 ## Hard rules
 
 - **Always use the Psilo SDK. Never call Paktsuite endpoints directly.**
-  Base URL: `http://localhost:9000/`
+  Base URL: `https://devapi-psilo.kapt.xyz/`
 
 - **All imports go at the top of every file. Never use inline `import()` expressions.**
 
@@ -26,15 +26,15 @@ effect but any ESM import picks up the old build.
 
 ## Key files
 
-| File | Purpose |
-|---|---|
-| `channel-pakt-daemon.mjs` | Main daemon — entry point |
-| `start-daemon.sh` | Host launcher (nohup + disown) |
-| `Dockerfile` | Docker image |
-| `docker-compose.yml` | Full stack: openclaw + psilocli sidecars |
-| `agents/agenta/.env.example` | Agent-A config template |
-| `agents/agentb/.env.example` | Agent-B config template |
-| `SKILL.md` | Full technical reference — read this before making changes |
+| File                         | Purpose                                                    |
+| ---------------------------- | ---------------------------------------------------------- |
+| `channel-pakt-daemon.mjs`    | Main daemon — entry point                                  |
+| `start-daemon.sh`            | Host launcher (nohup + disown)                             |
+| `Dockerfile`                 | Docker image                                               |
+| `docker-compose.yml`         | Full stack: openclaw + psilocli sidecars                   |
+| `agents/agenta/.env.example` | Agent-A config template                                    |
+| `agents/agentb/.env.example` | Agent-B config template                                    |
+| `SKILL.md`                   | Full technical reference — read this before making changes |
 
 ## Full technical reference
 

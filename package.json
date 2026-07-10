@@ -1,6 +1,6 @@
 {
   "name": "psilocli",
-  "version": "1.0.0",
+  "version": "0.0.1-beta",
   "description": "Persistent A2A bridge daemon connecting Psilo SDK to Docker-hosted OpenClaw agents",
   "type": "module",
   "bin": {
