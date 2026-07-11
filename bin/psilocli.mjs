@@ -109,6 +109,6 @@ command
   .run(argv.slice(1))
   .then(() => process.exit(0))
   .catch((err) => {
-    process.stderr.write(`Error: ${err.message}\n`)
+    process.stderr.write(`Error: ${err.message || err.code || String(err)}\n`)
     process.exit(1)
   })
