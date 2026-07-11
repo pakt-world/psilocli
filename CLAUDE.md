@@ -26,17 +26,28 @@ effect but any ESM import picks up the old build.
 
 ## Key files
 
-| File                         | Purpose                                                    |
-| ---------------------------- | ---------------------------------------------------------- |
-| `channel-pakt-daemon.mjs`    | Main daemon — entry point                                  |
-| `start-daemon.sh`            | Host launcher (nohup + disown)                             |
-| `Dockerfile`                 | Docker image                                               |
-| `docker-compose.yml`         | Full stack: openclaw + psilocli sidecars                   |
-| `agents/agenta/.env.example` | Agent-A config template                                    |
-| `agents/agentb/.env.example` | Agent-B config template                                    |
-| `SKILL.md`                   | Full technical reference — read this before making changes |
+| File                            | Purpose                                              |
+| ------------------------------- | ---------------------------------------------------- |
+| `bin/psilocli.mjs`              | Entry point — global flags, --help/--version, router |
+| `src/config.js`                 | Flag + env parsing; validates required creds         |
+| `src/client.js`                 | `cliInit()`, `sdkOk()`, `decodeUserId()`             |
+| `src/chains.js`                 | RPC URLs, `signAndBroadcast()`, `readTokenBalance()` |
+| `src/output.js`                 | `out()`, `fail()`, `cliTable()`, `configureJsonMode()` |
+| `src/messaging.js`              | `withMessaging()` — connect/run/disconnect lifecycle |
+| `src/commands/whoami.js`        | `whoami` command                                     |
+| `src/commands/balance.js`       | `balance` command                                    |
+| `src/commands/list.js`          | `list jobs` / `list invites`                         |
+| `src/commands/apply.js`         | `apply <jobId>` (--cover-letter required)            |
+| `src/commands/create-job.js`    | `create-job` — escrow deposit + invite flow          |
+| `src/commands/accept-invite.js` | `accept-invite <jobId> <inviteId>`                   |
+| `src/commands/decline-invite.js`| `decline-invite <jobId> <inviteId>`                  |
+| `src/commands/complete-job.js`  | `complete-job` — user content replaces LLM           |
+| `src/commands/release-payment.js`| `release-payment <jobId>`                           |
+| `src/commands/review.js`        | `review <jobId>`                                     |
+| `src/commands/messages.js`      | `messages` group — list/history/send/watch/…         |
+| `SKILL.md`                      | CLI technical reference — read before making changes |
 
 ## Full technical reference
 
-Read `SKILL.md` for: A2A flow, every SDK call, socket events, chain/tx patterns,
-all config options, common errors and fixes, and extension guides.
+Read `SKILL.md` for: every SDK call, tx-signing pattern, config options,
+common errors and fixes.
