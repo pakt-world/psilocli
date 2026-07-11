@@ -1,11 +1,6 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit } from '../client.js'
-import {
-  withMessaging,
-  withTimeout,
-  sleep,
-  FLUSH_MS,
-} from '../messaging.js'
+import { withMessaging, wsRequest } from '../messaging.js'
 import { out, print, note, fail, cliTable } from '../output.js'
 
 export const usage = `psilocli messages list
@@ -25,9 +20,10 @@ async function listConversations(argv) {
   const { values } = parseCommand(argv)
   const config = resolveConfig(values)
   const { jwt } = await cliInit(config)
-  const conversations = await withMessaging(config, jwt, (messaging) =>
-    withTimeout(messaging.loadConversations(), 10_000, 'loadConversations'),
-  )
+  const conversations = await withMessaging(config, jwt, async (messaging) => {
+    const data = await wsRequest(messaging, 'GET_ALL_CONVERSATIONS', {})
+    return data?.messages ?? []
+  })
   if (config.json) {
     out(conversations)
   } else if (conversations.length === 0) {
@@ -62,13 +58,12 @@ async function history(argv) {
 
   const config = resolveConfig(values)
   const { jwt } = await cliInit(config)
-  const conversation = await withMessaging(config, jwt, (messaging) =>
-    withTimeout(
-      messaging.fetchConversation(conversationId),
-      10_000,
-      'fetchConversation',
-    ),
-  )
+  const conversation = await withMessaging(config, jwt, async (messaging) => {
+    const data = await wsRequest(messaging, 'FETCH_CONVERSATION_MESSAGES', {
+      conversationId,
+    })
+    return data?.conversation ?? data
+  })
   const all = conversation?.chats?.messages ?? []
   const messages = all.slice(-limit)
   if (config.json) {
@@ -106,22 +101,18 @@ async function send(argv) {
   const conversationId = await withMessaging(config, jwt, async (messaging) => {
     let convId = values.conversation
     if (!convId) {
-      const convo = await withTimeout(
-        messaging.createDirectConversation(values.to),
-        10_000,
-        'createDirectConversation',
-      )
-      convId = convo._id
-    }
-    // sendMessage is a fire-and-forget socket emit — wait for the broadcast
-    // echo of our own message, falling back to a short flush delay.
-    const echo = new Promise((resolve) => {
-      messaging.onBroadcast((m) => {
-        if (m.conversation === convId && m.content === text) resolve(m)
+      const data = await wsRequest(messaging, 'INITIALIZE_CONVERSATION', {
+        type: 'DIRECT',
+        recipientId: values.to,
       })
+      convId = (data?.conversation ?? data)?._id
+      if (!convId) throw new Error('Could not open a conversation')
+    }
+    await wsRequest(messaging, 'SEND_MESSAGE', {
+      conversationId: convId,
+      type: 'TEXT',
+      message: text,
     })
-    messaging.sendMessage({ conversationId: convId, type: 'TEXT', message: text })
-    await Promise.race([echo, sleep(FLUSH_MS)])
     return convId
   })
   if (config.json) out({ ok: true, conversationId })
@@ -136,13 +127,14 @@ async function createGroup(argv) {
 
   const config = resolveConfig(values)
   const { jwt } = await cliInit(config)
-  const conversation = await withMessaging(config, jwt, (messaging) =>
-    withTimeout(
-      messaging.createGroupConversation(userIds, name),
-      10_000,
-      'createGroupConversation',
-    ),
-  )
+  const conversation = await withMessaging(config, jwt, async (messaging) => {
+    const data = await wsRequest(messaging, 'INITIALIZE_CONVERSATION', {
+      type: 'GROUP',
+      recipients: userIds.map((id) => ({ user: id, role: 'USER' })),
+      name,
+    })
+    return data?.conversation ?? data
+  })
   if (config.json) out({ ok: true, conversationId: conversation._id })
   else print(`Group "${name}" created (conversation: ${conversation._id})`)
 }
@@ -155,10 +147,12 @@ async function seen(argv) {
 
   const config = resolveConfig(values)
   const { jwt } = await cliInit(config)
-  await withMessaging(config, jwt, async (messaging) => {
-    messaging.markSeen(conversationId)
-    await sleep(500)
-  })
+  await withMessaging(config, jwt, (messaging) =>
+    wsRequest(messaging, 'MARK_MESSAGE_AS_SEEN', {
+      conversationId,
+      seen: Date.now().toString(),
+    }),
+  )
   if (config.json) out({ ok: true, conversationId })
   else print(`Conversation ${conversationId} marked seen`)
 }

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast } from '../chains.js'
-import { withMessaging, withTimeout, sleep, FLUSH_MS } from '../messaging.js'
+import { withMessaging, wsRequest, sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
 export const usage =
@@ -25,18 +25,18 @@ function isMessagingDeliverable(deliverable) {
 }
 
 async function sendToCreator(messaging, creatorId, content) {
-  const convo = await withTimeout(
-    messaging.createDirectConversation(creatorId),
-    10_000,
-    'createDirectConversation',
-  )
-  messaging.sendMessage({
-    conversationId: convo._id,
+  const data = await wsRequest(messaging, 'INITIALIZE_CONVERSATION', {
+    type: 'DIRECT',
+    recipientId: creatorId,
+  })
+  const convId = (data?.conversation ?? data)?._id
+  if (!convId) throw new Error('Could not open a conversation with the creator')
+  await wsRequest(messaging, 'SEND_MESSAGE', {
+    conversationId: convId,
     type: 'TEXT',
     message: content,
   })
-  await sleep(FLUSH_MS)
-  note(`Message sent to creator in conversation ${convo._id}`)
+  note(`Message sent to creator in conversation ${convId}`)
 }
 
 export async function run(argv) {

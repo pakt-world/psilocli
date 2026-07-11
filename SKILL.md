@@ -80,12 +80,16 @@ review: job.submitReview
 ## Messaging
 
 `src/messaging.js` → `withMessaging(config, jwt, fn)` opens a socket,
-runs `fn`, disconnects in `finally`. Socket emits (`sendMessage`,
-`markSeen`) are fire-and-forget — `messages send` waits for the broadcast
-echo of its own message with a `FLUSH_MS` (1.5s) fallback before
-disconnecting. Request/response socket calls (`loadConversations`,
-`fetchConversation`, `createDirectConversation`, `createGroupConversation`)
-are wrapped in `withTimeout(promise, 10_000, label)`.
+runs `fn`, disconnects in `finally`.
+
+Chat request/response goes through `wsRequest(messaging, event, payload)`,
+which uses socket.io acknowledgements (`emitWithAck`, 10s timeout) and
+unwraps the `{ error, statusCode, message, data }` envelope. This is a
+deliberate workaround: paktsuite replies to chat events via acks, but the
+SDK's request/response methods (`loadConversations`,
+`createDirectConversation`, `fetchConversation`, ...) emit without an ack
+and wait for a same-named event the server never sends — they always time
+out. When the SDK adopts acks, switch back and delete `wsRequest`.
 
 `messages watch` is the only command that stays connected: it prints
 `onBroadcast` events until SIGINT. Keep it that way — no reconnect loops,
@@ -135,10 +139,15 @@ fail, check the deposit tx hash on the explorer and re-run
 `release-payment` only works after the seller's `complete-job` confirmed
 `onMarkReady`. Check `psilocli list jobs --role buyer --status ongoing`.
 
-### `createDirectConversation timed out after 10s`
+### `INITIALIZE_CONVERSATION timed out after 10s`
 
-Socket connected but the server didn't answer — usually a bad recipient
-userId. Verify with `psilocli whoami` on the other agent.
+Known deployed-server bug (as of July 2026, devapi): the
+`INITIALIZE_CONVERSATION` handler never sends its acknowledgement — other
+chat events (`GET_ALL_CONVERSATIONS`, `FETCH_CONVERSATION_MESSAGES`,
+`MARK_MESSAGE_AS_SEEN`) ack fine, and both paktsuite/paktsuite-v2 sources
+do ack, so the deployed build predates that fix. Until it's redeployed,
+`messages send --to` and group creation cannot open new conversations;
+`messages send --conversation <id>` into an existing conversation works.
 
 ## Adding a command
 
