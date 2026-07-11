@@ -871,7 +871,7 @@ async function _runJob(sdk, messaging, jobId) {
         await sdk.job.toggleDeliverableProgress(
           jobId,
           String(deliverable._id),
-          { status: 'completed' },
+          { status: 'completed', comment: response },
         ),
         'toggleDeliverableProgress',
       )
@@ -958,6 +958,36 @@ async function _runJob(sdk, messaging, jobId) {
   console.log(
     `[${agentName}] Awaiting buyer payment release — review will be submitted on next connect`,
   )
+}
+
+// ── Deliverable quality judge ──────────────────────────────────────────────
+
+async function judgeDeliverables(job) {
+  const items = (job.deliverables ?? [])
+    .map(
+      (d, i) =>
+        `Deliverable ${i + 1}: "${d.title}"\nRequired: ${d.description || '(none)'}\nSubmitted: ${d.comment}`,
+    )
+    .join('\n\n')
+
+  const prompt = [
+    `You are a strict quality judge. A seller claims to have completed a freelance job.`,
+    `Job: "${job.title}"`,
+    job.description ? `Job description: ${job.description}` : '',
+    ``,
+    `Submitted deliverables:`,
+    items,
+    ``,
+    `Does the submitted work plausibly fulfill what was asked? Be skeptical — a vague, off-topic, or trivially short artifact should not pass.`,
+    `Reply ONLY with valid JSON: {"approved": true, "reason": "<one sentence>"}`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const raw = await generateReply(prompt)
+  const match = raw.match(/\{[\s\S]*?\}/)
+  if (!match) return { approved: false, reason: 'Judge returned unparseable response' }
+  return JSON.parse(match[0])
 }
 
 // ── Post-job review ────────────────────────────────────────────────────────
@@ -1787,6 +1817,31 @@ async function run() {
           return
         }
 
+        const emptyWork = (job.deliverables ?? []).filter(d => !d.comment?.trim())
+        if (emptyWork.length > 0) {
+          console.error(
+            `[${agentName}] [WS] Blocking release — ${emptyWork.length} deliverable(s) have no artifact (empty comment). Seller may have skipped work.`,
+          )
+          return
+        }
+
+        try {
+          const verdict = await judgeDeliverables(job)
+          if (!verdict.approved) {
+            console.error(
+              `[${agentName}] [WS] Blocking release — LLM judge rejected work: ${verdict.reason}`,
+            )
+            return
+          }
+          console.log(
+            `[${agentName}] [WS] Judge approved work — reason: ${verdict.reason}`,
+          )
+        } catch (err) {
+          console.warn(
+            `[${agentName}] [WS] Judge failed (${err.message}) — proceeding with release (fail-open)`,
+          )
+        }
+
         const chainId = String(job?.escrowChainId ?? JOB_CHAIN_ID ?? '43113')
 
         // Release payment: server returns an unsigned markBuyerEscrowReleaseReady() tx.
@@ -1829,9 +1884,14 @@ async function run() {
           job?.receiver?._id ?? job?.receiver ?? sellerId,
         )
         if (receiverId && !reviewedJobs.has(jobId)) {
+          const artifactLines = (job.deliverables ?? [])
+            .filter(d => d.comment?.trim())
+            .map(d => `- ${d.title}: ${d.comment}`)
+            .join('\n')
           const prompt = [
             `You just paid for a freelance job titled: "${job.title}"`,
             job.description ? `Job description: ${job.description}` : '',
+            artifactLines ? `Work delivered:\n${artifactLines}` : '',
             `Write a short professional review of the talent/seller (1-2 sentences) and give a star rating 1-5.`,
             `Reply ONLY with valid JSON: {"rating": <number 1-5>, "review": "<text>"}`,
           ]
