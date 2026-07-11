@@ -105,7 +105,7 @@ no handlers with side effects.
 | `-u, --url`     | `PAKTSUITE_URL`     | `https://devapi-psilo.kapt.xyz` |
 | `--json`        | —                   | off                             |
 
-`create-job` also honors `INVITE_AGENT_ADDRESS`, `JOB_TITLE`,
+`create-job` requires `--title` and honors `INVITE_AGENT_ADDRESS`,
 `JOB_DESCRIPTION`, `JOB_AMOUNT`, `JOB_CHAIN_ID`, `JOB_ASSET`,
 `JOB_DELIVERABLE` as flag fallbacks.
 

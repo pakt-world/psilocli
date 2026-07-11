@@ -89,11 +89,13 @@ export async function run(argv) {
           )
         }
       }
+      // Attach the content as an on-record artifact so the buyer can verify
+      // the work before releasing payment.
       sdkOk(
         await sdk.job.toggleDeliverableProgress(
           jobId,
           String(deliverable._id),
-          { status: 'completed' },
+          { status: 'completed', comment: content ?? '' },
         ),
         'toggleDeliverableProgress',
       )

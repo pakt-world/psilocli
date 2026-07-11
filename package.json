@@ -14,7 +14,7 @@
     "node": ">=18.3"
   },
   "repository": "github:pakt-world/psilocli",
-  "license": "MIT",
+  "license": "BSD-3-Clause",
   "publishConfig": {
     "access": "public"
   },

@@ -8,7 +8,6 @@ export const usage =
   'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>] [--chain-id <id>] [--asset <0x>] [--deliverable <t>]'
 
 const DEFAULTS = {
-  title: process.env.JOB_TITLE ?? 'Agent-to-Agent Task',
   description:
     process.env.JOB_DESCRIPTION ??
     'A task created programmatically by an agent buyer.',
@@ -140,11 +139,12 @@ export async function run(argv) {
   const inviteeAddress = values.invite ?? process.env.INVITE_AGENT_ADDRESS
   if (!inviteeAddress)
     fail('--invite <address> is required (or set INVITE_AGENT_ADDRESS)', 2)
+  if (!values.title) fail('--title is required', 2)
 
   const config = resolveConfig(values)
   const { sdk } = await cliInit(config)
   const result = await createJobAndInvite(sdk, config, inviteeAddress, {
-    title: values.title ?? DEFAULTS.title,
+    title: values.title,
     description: values.description ?? DEFAULTS.description,
     amount: values.amount ?? DEFAULTS.amount,
     chainId: values['chain-id'] ?? DEFAULTS.chainId,

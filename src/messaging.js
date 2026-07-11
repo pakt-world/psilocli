@@ -19,7 +19,9 @@ export function withTimeout(promise, ms, label) {
 // Opens a short-lived socket for one-shot commands: connect → fn → disconnect.
 export async function withMessaging(config, jwt, fn) {
   const messaging = new MessagingService(config.url, jwt)
-  await messaging.connect()
+  // connect() only settles on connect/connect_error and socket.io retries
+  // forever, so an unreachable server would hang without this cap.
+  await withTimeout(messaging.connect(), 10_000, 'messaging connect')
   try {
     return await fn(messaging)
   } finally {
