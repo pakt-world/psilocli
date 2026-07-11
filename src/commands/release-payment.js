@@ -1,31 +1,28 @@
-import { parseArgs } from 'node:util'
-import { sdkOk } from '../client.js'
+import { parseCommand, resolveConfig } from '../config.js'
+import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast } from '../chains.js'
-import { out, fail } from '../output.js'
+import { sleep } from '../messaging.js'
+import { out, print, fail } from '../output.js'
 
-export async function cmdReleasePayment(config, { sdk }, args) {
-  const { positionals } = parseArgs({
-    args,
-    options: {},
-    allowPositionals: true,
-    strict: true,
-  })
+export const usage = 'psilocli release-payment <jobId>'
 
+export async function run(argv) {
+  const { values, positionals } = parseCommand(argv, {}, { positionals: true })
   const jobId = positionals[0]
-  if (!jobId) fail('Usage: psilocli release-payment <jobId>', 2)
+  if (!jobId) fail(`Usage: ${usage}`, 2)
 
+  const config = resolveConfig(values)
+  const { sdk } = await cliInit(config)
   const releaseData = sdkOk(await sdk.job.releasePayment(jobId), 'releasePayment')
   const releasePayload = releaseData?.releasePayload
   if (!releasePayload)
     fail('No releasePayload returned — job may not be in review status')
-
-  // signAndBroadcast calls tx.wait() for one-block confirmation — no sleep needed.
-  const txHash = await signAndBroadcast(releasePayload, config.key)
+  const txHash = await signAndBroadcast(config.key, releasePayload)
+  await sleep(8_000)
   sdkOk(
     await sdk.job.confirmTx(jobId, { step: 'onRelease', txHash }),
     'confirmTx onRelease',
   )
-
   if (config.json) out({ ok: true, jobId, txHash })
-  else process.stdout.write(`Payment released — txHash: ${txHash}\n`)
+  else print(`Payment released — txHash: ${txHash}`)
 }

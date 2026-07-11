@@ -1,31 +1,32 @@
-import { parseArgs } from 'node:util'
-import { sdkOk } from '../client.js'
-import { out, fail, cliTable } from '../output.js'
+import { parseCommand, resolveConfig } from '../config.js'
+import { cliInit, sdkOk } from '../client.js'
+import { out, print, fail, cliTable } from '../output.js'
 
-export async function cmdList(config, { sdk }, args) {
-  const sub = args[0]
+export const usage =
+  'psilocli list jobs [--status <s>] [--limit <n>] [--role <r>] | psilocli list invites'
+
+export async function run(argv) {
+  const sub = argv[0]
 
   if (sub === 'jobs') {
-    const { values: flags } = parseArgs({
-      args: args.slice(1),
-      options: {
-        status: { type: 'string' },
-        limit:  { type: 'string' },
-        role:   { type: 'string' },
-      },
-      strict: true,
+    const { values } = parseCommand(argv.slice(1), {
+      status: { type: 'string' },
+      limit: { type: 'string' },
+      role: { type: 'string' },
     })
-    const status = flags.status ?? 'open'
-    const limit  = parseInt(flags.limit ?? '20', 10)
-    const listOpts = { status, limit, ...(flags.role ? { role: flags.role } : {}) }
-
+    const config = resolveConfig(values)
+    const { sdk } = await cliInit(config)
+    const listOpts = {
+      status: values.status ?? 'open',
+      limit: parseInt(values.limit ?? '20', 10),
+      ...(values.role ? { role: values.role } : {}),
+    }
     const result = sdkOk(await sdk.job.list(listOpts), 'job.list')
     const jobs = result?.data ?? (Array.isArray(result) ? result : [])
-
     if (config.json) {
       out(jobs)
     } else if (jobs.length === 0) {
-      process.stdout.write('No jobs found.\n')
+      print('No jobs found.')
     } else {
       cliTable(
         jobs.map((j) => [
@@ -42,13 +43,15 @@ export async function cmdList(config, { sdk }, args) {
   }
 
   if (sub === 'invites') {
-    const result = sdkOk(await sdk.job.listAllInvites(), 'listAllInvites')
-    const invites = result?.data ?? (Array.isArray(result) ? result : [])
-
+    const { values } = parseCommand(argv.slice(1))
+    const config = resolveConfig(values)
+    const { sdk } = await cliInit(config)
+    const { data: inviteList } = await sdk.job.listAllInvites()
+    const invites = inviteList?.data ?? []
     if (config.json) {
       out(invites)
     } else if (invites.length === 0) {
-      process.stdout.write('No invites found.\n')
+      print('No invites found.')
     } else {
       cliTable(
         invites.map((i) => [
@@ -64,5 +67,5 @@ export async function cmdList(config, { sdk }, args) {
     return
   }
 
-  fail('Usage: psilocli list jobs | psilocli list invites', 2)
+  fail(`Usage: ${usage}`, 2)
 }

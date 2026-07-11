@@ -1,5 +1,6 @@
 import { PsiloSDK } from '@pakt/psilo'
 
+// Unwraps the SDK's ResponseDto envelope; throws with context on error status.
 export function sdkOk(result, label) {
   if (!result || result.status === 'error' || !result.data) {
     throw new Error(
@@ -22,15 +23,4 @@ export async function cliInit(config) {
   const userId = decodeUserId(jwt)
   sdk.setAuthorizationHeader(jwt)
   return { sdk, userId, jwt }
-}
-
-export async function resolveUserIdByAddress(config, address) {
-  const res = await fetch(
-    `${config.url}/v1/account-public/by-wallet/${encodeURIComponent(address)}`,
-  )
-  if (!res.ok) throw new Error(`by-wallet lookup failed: ${res.status}`)
-  const body = await res.json()
-  const userId = body?.data?._id ?? body?._id
-  if (!userId) throw new Error(`No user found for address ${address}`)
-  return String(userId)
 }

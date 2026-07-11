@@ -1,38 +1,48 @@
 import { parseArgs } from 'node:util'
+import { fail } from './output.js'
 
-const { values } = parseArgs({
-  strict: false,
-  options: {
-    name:    { type: 'string',  short: 'n' },
-    key:     { type: 'string',  short: 'k' },
-    address: { type: 'string',  short: 'a' },
-    url:     { type: 'string',  short: 'u' },
-    json:    { type: 'boolean' },
-    help:    { type: 'boolean', short: 'h' },
-    version: { type: 'boolean', short: 'v' },
-  },
-})
+export const DEFAULT_URL = 'https://devapi-psilo.kapt.xyz'
 
-export const globalFlags = values
+// Flags accepted by every subcommand, merged into each command's own options.
+export const GLOBAL_OPTIONS = {
+  name: { type: 'string', short: 'n' },
+  key: { type: 'string', short: 'k' },
+  address: { type: 'string', short: 'a' },
+  url: { type: 'string', short: 'u' },
+  json: { type: 'boolean' },
+}
 
-export function loadConfig() {
-  const key     = values.key     ?? process.env.AGENT_PRIVATE_KEY
-  const address = values.address ?? process.env.AGENT_ADDRESS
-  const name    = values.name    ?? process.env.AGENT_NAME    ?? 'agent'
-  const url     = values.url     ?? process.env.PAKTSUITE_URL ?? 'https://devapi-psilo.kapt.xyz'
-  const json    = values.json    ?? false
+// strict parseArgs wrapper — typo'd flags are a usage error (exit 2), not
+// silently ignored.
+export function parseCommand(argv, options = {}, { positionals = false } = {}) {
+  try {
+    return parseArgs({
+      args: argv,
+      options: { ...GLOBAL_OPTIONS, ...options },
+      allowPositionals: positionals,
+      strict: true,
+    })
+  } catch (err) {
+    fail(err.message, 2)
+  }
+}
 
+export function resolveConfig(values, { requireAuth = true } = {}) {
   if (values.key) {
-    process.stderr.write('Warning: --key is visible in process list. Use AGENT_PRIVATE_KEY env var instead.\n')
+    process.stderr.write(
+      'Warning: --key on the command line is visible in shell history and process lists — prefer the AGENT_PRIVATE_KEY environment variable\n',
+    )
   }
-  if (!key) {
-    process.stderr.write('Error: AGENT_PRIVATE_KEY is required\n')
-    process.exit(1)
+  const config = {
+    name: values.name ?? process.env.AGENT_NAME ?? 'agent',
+    key: values.key ?? process.env.AGENT_PRIVATE_KEY,
+    address: values.address ?? process.env.AGENT_ADDRESS,
+    url: values.url ?? process.env.PAKTSUITE_URL ?? DEFAULT_URL,
+    json: Boolean(values.json),
   }
-  if (!address) {
-    process.stderr.write('Error: AGENT_ADDRESS is required\n')
-    process.exit(1)
+  if (requireAuth) {
+    if (!config.key) fail('--key / AGENT_PRIVATE_KEY is required')
+    if (!config.address) fail('--address / AGENT_ADDRESS is required')
   }
-
-  return { name, key, address, url, json }
+  return config
 }

@@ -1,78 +1,97 @@
-import { parseArgs } from 'node:util'
-import { sdkOk, resolveUserIdByAddress } from '../client.js'
+import { parseCommand, resolveConfig } from '../config.js'
+import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast } from '../chains.js'
-import { out, fail } from '../output.js'
+import { sleep } from '../messaging.js'
+import { out, print, note, fail } from '../output.js'
 
-async function createJobAndInvite(config, sdk, inviteeAddress, params = {}) {
-  const jobTitle       = params.title       ?? 'Agent-to-Agent Task'
-  const jobDescription = params.description ?? ''
-  const jobAmount      = params.amount      ?? '1'
-  const jobChainId     = params.chainId     ?? '43113'
-  const jobAsset       = params.asset       ?? ''
-  const jobDeliverable = params.deliverable ?? ''
+export const usage =
+  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>] [--chain-id <id>] [--asset <0x>] [--deliverable <t>]'
 
-  const inviteeUserId = await resolveUserIdByAddress(config, inviteeAddress)
+const DEFAULTS = {
+  description:
+    process.env.JOB_DESCRIPTION ??
+    'A task created programmatically by an agent buyer.',
+  amount: process.env.JOB_AMOUNT ?? '1',
+  chainId: process.env.JOB_CHAIN_ID ?? '43113',
+  asset: process.env.JOB_ASSET ?? '',
+  deliverable:
+    process.env.JOB_DELIVERABLE ??
+    'Send the buyer a message confirming job acceptance and your readiness to deliver.',
+}
 
-  const deliverables = jobDeliverable ? [{ name: jobDeliverable }] : []
+async function resolveUserIdByAddress(baseUrl, address) {
+  const res = await fetch(
+    `${baseUrl}/v1/account-public/by-wallet/${encodeURIComponent(address)}`,
+  )
+  if (!res.ok) throw new Error(`by-wallet lookup failed: ${res.status}`)
+  const body = await res.json()
+  const userId = body?.data?._id ?? body?._id
+  if (!userId) throw new Error(`No user found for address ${address}`)
+  return String(userId)
+}
+
+export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
+  note(`Resolving user ID for invitee address: ${inviteeAddress}`)
+  const inviteeUserId = await resolveUserIdByAddress(config.url, inviteeAddress)
+  note(`Invitee user ID: ${inviteeUserId}`)
 
   const createDto = {
-    title: jobTitle,
-    description: jobDescription,
-    amount: jobAmount,
-    chainId: jobChainId,
-    ...(jobAsset ? { asset: jobAsset } : {}),
-    deliverables,
+    title: params.title,
+    description: params.description,
+    amount: params.amount,
+    chainId: params.chainId,
+    ...(params.asset ? { asset: params.asset } : {}),
+    deliverables: params.deliverable ? [{ name: params.deliverable }] : [],
   }
 
-  // Step 1: Create job record
+  // Step 1: create the job record.
+  note(`Creating job: "${params.title}"`)
   const createData = sdkOk(await sdk.job.create(createDto), 'job.create')
   const job = createData?.job ?? createData
   const jobId = String(job._id)
-  process.stderr.write(`Job created — jobId: ${jobId}\n`)
+  note(`Job created — jobId: ${jobId}`)
 
-  // Step 2: Prepare escrow deposit
+  // Step 2: server creates the escrow on-chain and returns deposit/approve txs.
+  note('Calling makeDeposit to prepare escrow...')
   const depositData = sdkOk(await sdk.job.makeDeposit(jobId), 'makeDeposit')
-  process.stderr.write(
-    `Escrow address: ${depositData?.escrowAddress} — amount: ${depositData?.coinAmount} ${depositData?.coinSymbol}\n`,
+  note(
+    `Escrow address: ${depositData?.escrowAddress} — amount: ${depositData?.coinAmount} ${depositData?.coinSymbol}`,
   )
 
-  // Step 3: Sign approve tx (ERC-20 only)
-  // No sleep after approve — signAndBroadcast calls tx.wait() for one-block confirmation.
+  // Step 3: sign approve tx (ERC-20 only). signAndBroadcast waits for one
+  // confirmation, so the approve is mined before the deposit is sent.
   if (depositData?.approve) {
-    process.stderr.write('Signing ERC-20 approve tx...\n')
+    note('Signing ERC-20 approve tx...')
     const approveTx = {
       ...depositData.approve,
       chainId: depositData.approve.chainId ?? depositData.chainId,
     }
-    const approveTxHash = await signAndBroadcast(approveTx, config.key)
-    process.stderr.write(`Approve tx broadcast — txHash: ${approveTxHash}\n`)
+    const approveTxHash = await signAndBroadcast(config.key, approveTx)
+    note(`Approve tx confirmed — txHash: ${approveTxHash}`)
   }
 
-  // Step 4: Sign deposit tx
-  // No sleep after deposit — validatePayment retry loop handles indexing lag.
+  // Step 4: sign deposit tx.
   if (depositData?.deposit) {
-    process.stderr.write('Signing deposit tx...\n')
+    note('Signing deposit tx...')
     const depositTx = {
       ...depositData.deposit,
       chainId: depositData.deposit.chainId ?? depositData.chainId,
     }
-    const depositTxHash = await signAndBroadcast(depositTx, config.key)
-    process.stderr.write(`Deposit tx broadcast — txHash: ${depositTxHash}\n`)
+    const depositTxHash = await signAndBroadcast(config.key, depositTx)
+    note(`Deposit tx confirmed — txHash: ${depositTxHash}`)
   }
 
-  // Step 5: Validate payment on-chain (6 attempts, 10s apart)
+  // Step 5: validate payment on-chain; retries cover indexing lag.
   let validated = false
   for (let attempt = 1; attempt <= 6; attempt++) {
     try {
       sdkOk(await sdk.job.validatePayment(jobId), 'validatePayment')
       validated = true
-      process.stderr.write(`Escrow funded and validated (attempt ${attempt})\n`)
+      note(`Escrow funded and validated (attempt ${attempt})`)
       break
     } catch (err) {
-      process.stderr.write(
-        `validatePayment attempt ${attempt}/6 failed: ${err.message}\n`,
-      )
-      if (attempt < 6) await new Promise((r) => setTimeout(r, 10_000))
+      note(`validatePayment attempt ${attempt}/6 failed: ${err.message}`)
+      if (attempt < 6) await sleep(10_000)
     }
   }
   if (!validated) {
@@ -81,7 +100,8 @@ async function createJobAndInvite(config, sdk, inviteeAddress, params = {}) {
     )
   }
 
-  // Step 6: Send invite
+  // Step 6: send the invite; sign the invite tx if escrow-locked.
+  note(`Inviting ${inviteeAddress} (userId: ${inviteeUserId}) to job ${jobId}...`)
   const inviteData = sdkOk(
     await sdk.job.inviteTalent(jobId, { inviteeId: inviteeUserId }),
     'inviteTalent',
@@ -89,49 +109,48 @@ async function createJobAndInvite(config, sdk, inviteeAddress, params = {}) {
 
   if (inviteData?.invitePayload) {
     const tx = inviteData.invitePayload
-    const txHash = await signAndBroadcast(tx, config.key)
+    note(`Signing onInvite tx for chain ${tx.chainId}...`)
+    const txHash = await signAndBroadcast(config.key, tx)
     sdkOk(
-      await sdk.job.confirmTx(jobId, { step: 'onInvite', txHash, inviteeId: inviteeUserId }),
+      await sdk.job.confirmTx(jobId, {
+        step: 'onInvite',
+        txHash,
+        inviteeId: inviteeUserId,
+      }),
       'confirmTx onInvite',
     )
-    process.stderr.write(`confirmTx onInvite — txHash: ${txHash}\n`)
+    note(`confirmTx onInvite — txHash: ${txHash}`)
   }
 
-  process.stderr.write(
-    `Invite sent to ${inviteeAddress} for job "${jobTitle}" (${jobId})\n`,
-  )
+  note(`Invite sent to ${inviteeAddress} for job "${params.title}" (${jobId})`)
   return { jobId, inviteeAddress, inviteeUserId }
 }
 
-export async function cmdCreateJob(config, { sdk }, args) {
-  const { values: flags } = parseArgs({
-    args,
-    options: {
-      title:       { type: 'string' },
-      description: { type: 'string' },
-      amount:      { type: 'string' },
-      'chain-id':  { type: 'string' },
-      asset:       { type: 'string' },
-      deliverable: { type: 'string' },
-      invite:      { type: 'string' },
-    },
-    strict: true,
+export async function run(argv) {
+  const { values } = parseCommand(argv, {
+    title: { type: 'string' },
+    description: { type: 'string' },
+    amount: { type: 'string' },
+    'chain-id': { type: 'string' },
+    asset: { type: 'string' },
+    deliverable: { type: 'string' },
+    invite: { type: 'string' },
   })
+  const inviteeAddress = values.invite ?? process.env.INVITE_AGENT_ADDRESS
+  if (!inviteeAddress)
+    fail('--invite <address> is required (or set INVITE_AGENT_ADDRESS)', 2)
+  if (!values.title) fail('--title is required', 2)
 
-  const inviteeAddress = flags.invite ?? process.env.INVITE_AGENT_ADDRESS
-  if (!inviteeAddress) fail('--invite <address> is required', 2)
-
-  if (!flags.title) fail('--title is required', 2)
-
-  const result = await createJobAndInvite(config, sdk, inviteeAddress, {
-    title:       flags.title,
-    description: flags.description,
-    amount:      flags.amount,
-    chainId:     flags['chain-id'],
-    asset:       flags.asset,
-    deliverable: flags.deliverable,
+  const config = resolveConfig(values)
+  const { sdk } = await cliInit(config)
+  const result = await createJobAndInvite(sdk, config, inviteeAddress, {
+    title: values.title,
+    description: values.description ?? DEFAULTS.description,
+    amount: values.amount ?? DEFAULTS.amount,
+    chainId: values['chain-id'] ?? DEFAULTS.chainId,
+    asset: values.asset ?? DEFAULTS.asset,
+    deliverable: values.deliverable ?? DEFAULTS.deliverable,
   })
-
   if (config.json) out({ ok: true, ...result })
-  else process.stdout.write(`Job created and invite sent — jobId: ${result.jobId}\n`)
+  else print(`Job created and invite sent — jobId: ${result.jobId}`)
 }

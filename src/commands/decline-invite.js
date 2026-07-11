@@ -1,20 +1,17 @@
-import { parseArgs } from 'node:util'
-import { out, fail } from '../output.js'
+import { parseCommand, resolveConfig } from '../config.js'
+import { cliInit, sdkOk } from '../client.js'
+import { out, print, fail } from '../output.js'
 
-export async function cmdDeclineInvite(config, { sdk }, args) {
-  const { positionals } = parseArgs({
-    args,
-    options: {},
-    allowPositionals: true,
-    strict: true,
-  })
+export const usage = 'psilocli decline-invite <jobId> <inviteId>'
 
+export async function run(argv) {
+  const { values, positionals } = parseCommand(argv, {}, { positionals: true })
   const [jobId, inviteId] = positionals
-  if (!jobId || !inviteId)
-    fail('Usage: psilocli decline-invite <jobId> <inviteId>', 2)
+  if (!jobId || !inviteId) fail(`Usage: ${usage}`, 2)
 
-  await sdk.job.declineInvite(jobId, inviteId)
-
+  const config = resolveConfig(values)
+  const { sdk } = await cliInit(config)
+  sdkOk(await sdk.job.declineInvite(jobId, inviteId), 'declineInvite')
   if (config.json) out({ ok: true, jobId, inviteId })
-  else process.stdout.write(`Declined invite ${inviteId}\n`)
+  else print(`Declined invite ${inviteId}`)
 }

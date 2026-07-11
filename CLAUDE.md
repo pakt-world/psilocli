@@ -4,16 +4,18 @@
 
 - **Always use the Psilo SDK. Never call Paktsuite endpoints directly.**
   Base URL: `https://devapi-psilo.kapt.xyz/`
+  (Known exception: the `by-wallet` account lookup in
+  `src/commands/create-job.js` — the SDK has no method for it yet.)
 
 - **All imports go at the top of every file. Never use inline `import()` expressions.**
 
 ## SDK rebuild
 
-After editing `PsiloSDK/src/`, rebuild and copy BOTH dist files or the ESM
+After editing `psilo-sdk/src/`, rebuild and copy BOTH dist files or the ESM
 entry will silently run stale code:
 
 ```sh
-cd ../PsiloSDK   # or wherever PsiloSDK lives
+cd ../psilo-sdk   # or wherever the SDK lives
 npm run build
 cp dist/main.js     <repo>/node_modules/@pakt/psilo/dist/main.js
 cp dist/main.js.map <repo>/node_modules/@pakt/psilo/dist/main.js.map
@@ -26,28 +28,24 @@ effect but any ESM import picks up the old build.
 
 ## Key files
 
-| File                            | Purpose                                              |
-| ------------------------------- | ---------------------------------------------------- |
-| `bin/psilocli.mjs`              | Entry point — global flags, --help/--version, router |
-| `src/config.js`                 | Flag + env parsing; validates required creds         |
-| `src/client.js`                 | `cliInit()`, `sdkOk()`, `decodeUserId()`             |
-| `src/chains.js`                 | RPC URLs, `signAndBroadcast()`, `readTokenBalance()` |
-| `src/output.js`                 | `out()`, `fail()`, `cliTable()`, `configureJsonMode()` |
-| `src/messaging.js`              | `withMessaging()` — connect/run/disconnect lifecycle |
-| `src/commands/whoami.js`        | `whoami` command                                     |
-| `src/commands/balance.js`       | `balance` command                                    |
-| `src/commands/list.js`          | `list jobs` / `list invites`                         |
-| `src/commands/apply.js`         | `apply <jobId>` (--cover-letter required)            |
-| `src/commands/create-job.js`    | `create-job` — escrow deposit + invite flow          |
-| `src/commands/accept-invite.js` | `accept-invite <jobId> <inviteId>`                   |
-| `src/commands/decline-invite.js`| `decline-invite <jobId> <inviteId>`                  |
-| `src/commands/complete-job.js`  | `complete-job` — user content replaces LLM           |
-| `src/commands/release-payment.js`| `release-payment <jobId>`                           |
-| `src/commands/review.js`        | `review <jobId>`                                     |
-| `src/commands/messages.js`      | `messages` group — list/history/send/watch/…         |
-| `SKILL.md`                      | CLI technical reference — read before making changes |
+| File                  | Purpose                                                       |
+| --------------------- | ------------------------------------------------------------- |
+| `bin/psilocli.mjs`    | Entry point — help/version, verb router, send-message alias   |
+| `src/config.js`       | Global flags + env fallbacks, strict parseArgs wrapper        |
+| `src/client.js`       | `cliInit()` (SDK init + web3 login), `sdkOk()`, JWT decode    |
+| `src/chains.js`       | RPC URLs, `signAndBroadcast()`, ERC-20 balance reader         |
+| `src/messaging.js`    | `withMessaging()` socket lifecycle, timeouts, flush delay     |
+| `src/output.js`       | stdout/stderr discipline: `out()`, `print()`, `note()`, table |
+| `src/commands/*.js`   | One module per subcommand                                     |
+| `SKILL.md`            | Technical reference — read this before making changes         |
 
-## Full technical reference
+## Conventions
 
-Read `SKILL.md` for: every SDK call, tx-signing pattern, config options,
-common errors and fixes.
+- stdout carries command output only (tables or `--json`); progress and
+  diagnostics go to stderr via `note()`. Exit codes: 0 success, 1 error,
+  2 usage error.
+- Every command parses its own argv with `parseCommand()` (strict) and
+  resolves auth via `resolveConfig()`.
+- The daemon that used to live here was removed in 0.1.0 — do not add
+  long-running or LLM-driven behavior to this package (`messages watch`
+  is the only command that stays connected, and only until Ctrl-C).

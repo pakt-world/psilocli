@@ -1,22 +1,19 @@
-import { parseArgs } from 'node:util'
 import { ethers } from 'ethers'
+import { parseCommand, resolveConfig } from '../config.js'
 import { RPC_URLS, NATIVE_SYMBOLS, readTokenBalance } from '../chains.js'
-import { out, fail } from '../output.js'
+import { out, print, fail } from '../output.js'
 
-export async function cmdBalance(config, _auth, args) {
-  const { values: flags } = parseArgs({
-    args,
-    options: {
-      chain: { type: 'string' },
-      token: { type: 'string' },
-    },
-    strict: true,
+export const usage = 'psilocli balance [--chain <id>] [--token <0x>]'
+
+export async function run(argv) {
+  const { values } = parseCommand(argv, {
+    chain: { type: 'string' },
+    token: { type: 'string' },
   })
-
-  const chainId = flags.chain ?? '43113'
+  const config = resolveConfig(values)
+  const chainId = values.chain ?? '43113'
   const rpcUrl = RPC_URLS[chainId]
   if (!rpcUrl) fail(`No RPC URL configured for chain ${chainId}`)
-
   const provider = new ethers.JsonRpcProvider(rpcUrl)
   const raw = await provider.getBalance(config.address)
   const result = {
@@ -26,24 +23,21 @@ export async function cmdBalance(config, _auth, args) {
       balance: ethers.formatEther(raw),
     },
   }
-
-  if (flags.token) {
+  if (values.token) {
     const { formatted, symbol } = await readTokenBalance(
-      flags.token,
+      values.token,
       chainId,
       config.address,
     )
-    result.token = { address: flags.token, symbol, balance: formatted }
+    result.token = { address: values.token, symbol, balance: formatted }
   }
-
   if (config.json) {
     out(result)
   } else {
-    process.stdout.write(`${result.native.symbol}: ${result.native.balance}\n`)
-    if (result.token) {
-      process.stdout.write(
-        `${result.token.symbol} (${result.token.address}): ${result.token.balance}\n`,
+    print(`${result.native.symbol}: ${result.native.balance}`)
+    if (result.token)
+      print(
+        `${result.token.symbol} (${result.token.address}): ${result.token.balance}`,
       )
-    }
   }
 }

@@ -1,130 +1,114 @@
 #!/usr/bin/env node
-import { createRequire } from 'module'
+import { createRequire } from 'node:module'
+import * as whoami from '../src/commands/whoami.js'
+import * as balance from '../src/commands/balance.js'
+import * as list from '../src/commands/list.js'
+import * as apply from '../src/commands/apply.js'
+import * as createJob from '../src/commands/create-job.js'
+import * as acceptInvite from '../src/commands/accept-invite.js'
+import * as declineInvite from '../src/commands/decline-invite.js'
+import * as completeJob from '../src/commands/complete-job.js'
+import * as releasePayment from '../src/commands/release-payment.js'
+import * as review from '../src/commands/review.js'
+import * as messages from '../src/commands/messages.js'
 
-const { version } = createRequire(import.meta.url)('../package.json')
+const require = createRequire(import.meta.url)
+const { version } = require('../package.json')
 
-import { globalFlags, loadConfig } from '../src/config.js'
-import { cliInit } from '../src/client.js'
-import { configureJsonMode, fail } from '../src/output.js'
-
-import { cmdWhoami }         from '../src/commands/whoami.js'
-import { cmdBalance }        from '../src/commands/balance.js'
-import { cmdList }           from '../src/commands/list.js'
-import { cmdApply }          from '../src/commands/apply.js'
-import { cmdCreateJob }      from '../src/commands/create-job.js'
-import { cmdAcceptInvite }   from '../src/commands/accept-invite.js'
-import { cmdDeclineInvite }  from '../src/commands/decline-invite.js'
-import { cmdCompleteJob }    from '../src/commands/complete-job.js'
-import { cmdReleasePayment } from '../src/commands/release-payment.js'
-import { cmdReview }         from '../src/commands/review.js'
-import { cmdMessages }       from '../src/commands/messages.js'
+const COMMANDS = {
+  whoami,
+  balance,
+  list,
+  apply,
+  'create-job': createJob,
+  'accept-invite': acceptInvite,
+  'decline-invite': declineInvite,
+  'complete-job': completeJob,
+  'release-payment': releasePayment,
+  review,
+  messages,
+}
 
 const HELP = `
-psilocli — Pakt marketplace CLI
+psilocli — terminal client for the Pakt marketplace
 
 USAGE
   psilocli <command> [options]
 
-AUTH (env vars recommended — flags are visible in ps)
-  AGENT_PRIVATE_KEY   Wallet private key         (or --key)
-  AGENT_ADDRESS       Wallet address             (or --address)
-  PAKTSUITE_URL       API base URL               (or --url, default: https://devapi-psilo.kapt.xyz)
-  AGENT_NAME          Display name               (or --name, default: agent)
-
-GLOBAL FLAGS
-  -k, --key <hex>        Private key (use env var instead)
-  -a, --address <0x>     Wallet address
-  -u, --url <url>        API base URL
-  -n, --name <name>      Agent name
-      --json             Output JSON to stdout (info logs go to stderr)
-  -h, --help             Show this help
-  -v, --version          Print version
-
 COMMANDS
-  whoami                                      Print identity
-  balance [--chain <id>] [--token <addr>]     Check wallet balance
-  list jobs [--status open] [--limit 20]      List jobs
-  list invites                                List pending invites
-  apply <jobId> --cover-letter <text>         Apply to a job (- reads stdin)
-  create-job --title <t> --invite <addr>      Create job and invite agent
-  accept-invite <jobId> <inviteId>            Accept a job invite (signs tx)
-  decline-invite <jobId> <inviteId>           Decline a job invite
-  complete-job <jobId> [--content "..."]      Mark deliverables complete
-  release-payment <jobId>                     Release escrow to seller
-  review <jobId> --receiver <userId>          Submit a review
-  messages <subcommand>                       Messaging (list/history/send/watch…)
+  whoami                                                Show agent identity
+  balance [--chain <id>] [--token <0x>]                 Wallet balance
+  list jobs [--status <s>] [--limit <n>] [--role <r>]   List jobs
+  list invites                                          List received invites
+  apply <jobId> --cover-letter <text | ->               Apply to a job (- reads stdin)
+  create-job --title <t> --amount <n> --invite <0x>     Create, fund escrow, and invite
+  accept-invite <jobId> <inviteId>                      Accept a job invite (signs tx)
+  decline-invite <jobId> <inviteId>                     Decline a job invite
+  complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job
+  release-payment <jobId>                               Release escrow to seller
+  review <jobId> --receiver <userId> [--rating n] [--text t]  Submit a review
 
-Exit codes: 0 success  1 runtime error  2 usage error
-`.trim()
+MESSAGING
+  messages list                                         List conversations
+  messages history <conversationId> [--limit <n>]       Show conversation messages
+  messages send (--to <userId> | --conversation <id>) <text>   Send a message
+  messages create-group <name> <userId...>              Create a group conversation
+  messages seen <conversationId>                        Mark conversation seen
+  messages watch [--conversation <id>]                  Tail incoming messages (Ctrl-C)
 
-const verb = process.argv[2]
+GLOBAL OPTIONS (every command)
+  -n, --name <name>       Agent display name       [AGENT_NAME, default: agent]
+  -k, --key <hex>         Agent private key        [AGENT_PRIVATE_KEY] *required
+  -a, --address <0x>      Agent wallet address     [AGENT_ADDRESS] *required
+  -u, --url <url>         Paktsuite API base URL   [PAKTSUITE_URL]
+      --json              Machine-readable JSON on stdout
 
-if (!verb || globalFlags.help) {
-  process.stdout.write(HELP + '\n')
+  Prefer AGENT_PRIVATE_KEY over --key: flags are visible in shell
+  history and process lists.
+
+META
+  -h, --help              Show this help
+  -v, --version           Show version
+
+  Exit codes: 0 = success, 1 = error, 2 = usage error.
+
+EXAMPLES
+  psilocli whoami
+  psilocli list jobs --status open --json
+  psilocli apply 6650f0... --cover-letter "I can deliver this."
+  psilocli create-job --title "Write a report" --amount 2 --invite 0xAGENT
+  psilocli complete-job 6650f0... --content "Here is the finished report: ..."
+`
+
+let argv = process.argv.slice(2)
+// Back-compat alias: send-message <userId> <text...>
+if (argv[0] === 'send-message') {
+  const [, userId, ...text] = argv
+  argv = ['messages', 'send', '--to', userId ?? '', ...text]
+}
+const verb = argv[0]
+
+if (!verb || verb === '--help' || verb === '-h') {
+  console.log(HELP)
   process.exit(0)
 }
-
-if (globalFlags.version) {
-  process.stdout.write(`psilocli ${version}\n`)
-  process.exit(0)
-}
-
-// --version / --help can appear as the verb itself
 if (verb === '--version' || verb === '-v') {
-  process.stdout.write(`psilocli ${version}\n`)
-  process.exit(0)
-}
-if (verb === '--help' || verb === '-h') {
-  process.stdout.write(HELP + '\n')
+  console.log(`psilocli ${version}`)
   process.exit(0)
 }
 
-const VERBS = new Set([
-  'whoami', 'balance', 'list', 'apply', 'create-job',
-  'accept-invite', 'decline-invite', 'complete-job',
-  'release-payment', 'review', 'messages', 'send-message',
-])
-
-if (!VERBS.has(verb)) {
-  process.stderr.write(`Error: Unknown subcommand "${verb}". Run psilocli --help for usage.\n`)
+const command = COMMANDS[verb]
+if (!command) {
+  process.stderr.write(
+    `Unknown command "${verb}". Run psilocli --help for usage.\n`,
+  )
   process.exit(2)
 }
 
-const config = loadConfig()
-if (config.json) configureJsonMode()
-
-// Args for the command: everything after the verb, minus global flags that
-// config.js already consumed. Per-command parsers run strict: true on these.
-const cmdArgs = process.argv.slice(3)
-
-async function main() {
-  // Commands that need authentication
-  const needsAuth = new Set([
-    'whoami', 'balance', 'list', 'apply', 'create-job',
-    'accept-invite', 'decline-invite', 'complete-job',
-    'release-payment', 'review', 'messages', 'send-message',
-  ])
-
-  const auth = needsAuth.has(verb) ? await cliInit(config) : null
-
-  switch (verb) {
-    case 'whoami':          return cmdWhoami(config, auth, cmdArgs)
-    case 'balance':         return cmdBalance(config, auth, cmdArgs)
-    case 'list':            return cmdList(config, auth, cmdArgs)
-    case 'apply':           return cmdApply(config, auth, cmdArgs)
-    case 'create-job':      return cmdCreateJob(config, auth, cmdArgs)
-    case 'accept-invite':   return cmdAcceptInvite(config, auth, cmdArgs)
-    case 'decline-invite':  return cmdDeclineInvite(config, auth, cmdArgs)
-    case 'complete-job':    return cmdCompleteJob(config, auth, cmdArgs)
-    case 'release-payment': return cmdReleasePayment(config, auth, cmdArgs)
-    case 'review':          return cmdReview(config, auth, cmdArgs)
-    case 'messages':        return cmdMessages(config, auth, cmdArgs)
-    // Hidden backwards-compat alias: send-message <userId> <text>
-    case 'send-message':    return cmdMessages(config, auth, ['send', '--to', ...cmdArgs])
-  }
-}
-
-main().then(() => process.exit(0)).catch((err) => {
-  process.stderr.write(`Error: ${err.message}\n`)
-  process.exit(1)
-})
+command
+  .run(argv.slice(1))
+  .then(() => process.exit(0))
+  .catch((err) => {
+    process.stderr.write(`Error: ${err.message || err.code || String(err)}\n`)
+    process.exit(1)
+  })

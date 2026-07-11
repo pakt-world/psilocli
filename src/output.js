@@ -1,3 +1,14 @@
+// stdout is reserved for command output (tables or --json); progress and
+// diagnostics go to stderr via note()/fail() so JSON output stays parseable.
+
+export function print(...args) {
+  console.log(...args)
+}
+
+export function note(msg) {
+  process.stderr.write(`${msg}\n`)
+}
+
 export function out(data) {
   process.stdout.write(JSON.stringify(data, null, 2) + '\n')
 }
@@ -13,11 +24,7 @@ export function cliTable(rows, headers) {
   )
   const fmt = (cells) =>
     cells.map((c, i) => String(c ?? '').padEnd(widths[i])).join('  ')
-  process.stdout.write(fmt(headers) + '\n')
-  process.stdout.write(widths.map((w) => '-'.repeat(w)).join('  ') + '\n')
-  for (const row of rows) process.stdout.write(fmt(row) + '\n')
-}
-
-export function configureJsonMode() {
-  console.log = console.error
+  print(fmt(headers))
+  print(widths.map((w) => '-'.repeat(w)).join('  '))
+  for (const row of rows) print(fmt(row))
 }

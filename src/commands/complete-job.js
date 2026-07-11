@@ -1,10 +1,14 @@
-import { parseArgs } from 'node:util'
-import { readFileSync } from 'fs'
-import { sdkOk } from '../client.js'
+import { readFileSync } from 'node:fs'
+import { parseCommand, resolveConfig } from '../config.js'
+import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast } from '../chains.js'
-import { withMessaging } from '../messaging.js'
-import { out, fail } from '../output.js'
+import { withMessaging, wsRequest, sleep } from '../messaging.js'
+import { out, print, note, fail } from '../output.js'
 
+export const usage =
+  'psilocli complete-job <jobId> [--content <text> | --content-file <path>]'
+
+// A deliverable whose title/description asks the seller to message the buyer.
 function isMessagingDeliverable(deliverable) {
   const text =
     `${deliverable.title ?? ''} ${deliverable.description ?? ''}`.toLowerCase()
@@ -20,59 +24,73 @@ function isMessagingDeliverable(deliverable) {
   )
 }
 
-async function runJob(config, sdk, jobId, content) {
+async function sendToCreator(messaging, creatorId, content) {
+  const data = await wsRequest(messaging, 'INITIALIZE_CONVERSATION', {
+    type: 'DIRECT',
+    recipientId: creatorId,
+  })
+  const convId = (data?.conversation ?? data)?._id
+  if (!convId) throw new Error('Could not open a conversation with the creator')
+  await wsRequest(messaging, 'SEND_MESSAGE', {
+    conversationId: convId,
+    type: 'TEXT',
+    message: content,
+  })
+  note(`Message sent to creator in conversation ${convId}`)
+}
+
+export async function run(argv) {
+  const { values, positionals } = parseCommand(
+    argv,
+    {
+      content: { type: 'string' },
+      'content-file': { type: 'string' },
+    },
+    { positionals: true },
+  )
+  const jobId = positionals[0]
+  if (!jobId) fail(`Usage: ${usage}`, 2)
+  let content = values.content ?? null
+  if (!content && values['content-file'])
+    content = readFileSync(values['content-file'], 'utf8').trim()
+
+  const config = resolveConfig(values)
+  const { sdk, jwt } = await cliInit(config)
+
   const jobData = sdkOk(await sdk.job.getById(jobId), 'getById')
   const job = jobData?.job ?? jobData
 
   const jobSeller = (job.seller ?? '').toLowerCase()
-  if (jobSeller && jobSeller !== config.address.toLowerCase()) {
-    fail(`You are not the seller for job ${jobId} (seller: ${jobSeller})`)
-  }
+  if (jobSeller && jobSeller !== config.address.toLowerCase())
+    fail(`Not the seller of "${job.title}" (seller: ${jobSeller})`)
 
   const allDeliverables = job.deliverables ?? []
   const pending = allDeliverables.filter((d) => d.status !== 'completed')
-  process.stderr.write(
-    `Job "${job.title}" — ${pending.length}/${allDeliverables.length} deliverable(s) pending\n`,
+  note(
+    `Job "${job.title}" — ${pending.length}/${allDeliverables.length} deliverable(s) pending`,
   )
 
-  // Validate: if any pending deliverable needs messaging, --content must be provided.
   const messagingPending = pending.filter(isMessagingDeliverable)
-  if (messagingPending.length > 0 && !content) {
+  if (messagingPending.length > 0 && !content)
     fail(
-      `--content is required for messaging deliverable "${messagingPending[0].title}"`,
+      `Deliverable "${messagingPending[0].title}" requires sending a message — provide --content or --content-file`,
       2,
     )
-  }
 
-  const needsSocket = messagingPending.length > 0
-
-  const execute = async (messaging) => {
+  const completeDeliverables = async (messaging) => {
+    const creatorId = String(job.creator?._id ?? job.creator ?? '')
     for (const deliverable of pending) {
-      process.stderr.write(`Working on deliverable: "${deliverable.title}"\n`)
-
       if (isMessagingDeliverable(deliverable) && messaging) {
-        const creatorId = String(job.creator?._id ?? job.creator ?? '')
         if (creatorId) {
-          const convo = await Promise.race([
-            messaging.createDirectConversation(creatorId),
-            new Promise((_, reject) =>
-              setTimeout(
-                () => reject(new Error('createDirectConversation timed out after 10s')),
-                10_000,
-              ),
-            ),
-          ])
-          messaging.sendMessage({
-            conversationId: convo._id,
-            type: 'TEXT',
-            message: content,
-          })
-          process.stderr.write(`Message sent to creator in conversation ${convo._id}\n`)
+          await sendToCreator(messaging, creatorId, content)
         } else {
-          process.stderr.write('Messaging deliverable but creator ID unknown — skipping send\n')
+          note(
+            `Messaging deliverable "${deliverable.title}" but creator ID unknown — skipping send`,
+          )
         }
       }
-
+      // Attach the content as an on-record artifact so the buyer can verify
+      // the work before releasing payment.
       sdkOk(
         await sdk.job.toggleDeliverableProgress(
           jobId,
@@ -81,89 +99,59 @@ async function runJob(config, sdk, jobId, content) {
         ),
         'toggleDeliverableProgress',
       )
-      process.stderr.write(`Deliverable "${deliverable.title}" marked complete\n`)
-    }
-
-    // Verify nothing still pending before completing
-    const refreshed = sdkOk(await sdk.job.getById(jobId), 'getById (pre-complete check)')
-    const refreshedJob = refreshed?.job ?? refreshed
-    const stillPending = (refreshedJob?.deliverables ?? []).filter(
-      (d) => d.status !== 'completed',
-    )
-    if (stillPending.length > 0) {
-      fail(`${stillPending.length} deliverable(s) still incomplete after marking — aborting`)
-    }
-
-    process.stderr.write('All deliverables confirmed complete — completing job\n')
-
-    const completeData = sdkOk(await sdk.job.completeJob(jobId, {}), 'completeJob')
-    const { markReadyPayload } = completeData
-
-    if (markReadyPayload) {
-      process.stderr.write(
-        `Signing markReady tx for chain ${markReadyPayload.chainId}...\n`,
-      )
-      const txHash = await signAndBroadcast(markReadyPayload, config.key)
-      process.stderr.write(`markReady broadcast — txHash: ${txHash}\n`)
-
-      let confirmed = false
-      for (let attempt = 1; attempt <= 6; attempt++) {
-        await new Promise((r) => setTimeout(r, 10_000))
-        try {
-          sdkOk(
-            await sdk.job.confirmTx(jobId, { step: 'onMarkReady', txHash }),
-            'confirmTx onMarkReady',
-          )
-          process.stderr.write(
-            `Job marked ready on-chain (attempt ${attempt}) — txHash: ${txHash}\n`,
-          )
-          confirmed = true
-          break
-        } catch (err) {
-          process.stderr.write(
-            `confirmTx onMarkReady attempt ${attempt}/6 failed: ${err.message}\n`,
-          )
-        }
-      }
-      if (!confirmed) {
-        fail('confirmTx onMarkReady exhausted retries — buyer cannot release until confirmed')
-      }
-    } else {
-      process.stderr.write('Job completed (off-chain)\n')
+      note(`Deliverable "${deliverable.title}" marked complete`)
     }
   }
 
-  if (needsSocket) {
-    await withMessaging({ url: config.url, jwt: config._jwt }, execute)
+  if (messagingPending.length > 0) {
+    await withMessaging(config, jwt, completeDeliverables)
   } else {
-    await execute(null)
-  }
-}
-
-export async function cmdCompleteJob(config, auth, args) {
-  const { values: flags, positionals } = parseArgs({
-    args,
-    options: {
-      content:      { type: 'string' },
-      'content-file': { type: 'string' },
-    },
-    allowPositionals: true,
-    strict: true,
-  })
-
-  const jobId = positionals[0]
-  if (!jobId) fail('Usage: psilocli complete-job <jobId> [--content "..." | --content-file path]', 2)
-
-  let content = flags.content
-  if (!content && flags['content-file']) {
-    content = readFileSync(flags['content-file'], 'utf8').trim()
+    await completeDeliverables(null)
   }
 
-  // Attach jwt to config so withMessaging can use it if needed
-  config._jwt = auth.jwt
+  // Re-fetch and verify nothing pending before completing the job.
+  const refreshed = sdkOk(
+    await sdk.job.getById(jobId),
+    'getById (pre-complete check)',
+  )
+  const refreshedJob = refreshed?.job ?? refreshed
+  const stillPending = (refreshedJob?.deliverables ?? []).filter(
+    (d) => d.status !== 'completed',
+  )
+  if (stillPending.length > 0)
+    fail(`${stillPending.length} deliverable(s) still incomplete — aborting completeJob`)
 
-  await runJob(config, auth.sdk, jobId, content)
+  note('All deliverables confirmed complete — completing job')
+  const completeData = sdkOk(await sdk.job.completeJob(jobId, {}), 'completeJob')
 
-  if (config.json) out({ ok: true, jobId })
-  else process.stdout.write(`Job ${jobId} complete\n`)
+  let txHash = null
+  const { markReadyPayload } = completeData
+  if (markReadyPayload) {
+    note(`Signing markReady tx for chain ${markReadyPayload.chainId}...`)
+    txHash = await signAndBroadcast(config.key, markReadyPayload)
+    note(`markReady broadcast — txHash: ${txHash} — confirming with API...`)
+
+    let confirmed = false
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      await sleep(10_000)
+      try {
+        sdkOk(
+          await sdk.job.confirmTx(jobId, { step: 'onMarkReady', txHash }),
+          'confirmTx onMarkReady',
+        )
+        note(`Job marked ready on-chain (attempt ${attempt})`)
+        confirmed = true
+        break
+      } catch (err) {
+        note(`confirmTx onMarkReady attempt ${attempt}/6 failed: ${err.message}`)
+      }
+    }
+    if (!confirmed)
+      fail(`confirmTx onMarkReady exhausted retries — txHash: ${txHash}`)
+  } else {
+    note('Job completed (off-chain)')
+  }
+
+  if (config.json) out({ ok: true, jobId, txHash })
+  else print(txHash ? `Job ${jobId} complete — txHash: ${txHash}` : `Job ${jobId} complete`)
 }

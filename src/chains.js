@@ -1,8 +1,8 @@
 import { ethers } from 'ethers'
 
 export const RPC_URLS = {
-  43113: 'https://api.avax-test.network/ext/bc/C/rpc',
-  43114: 'https://api.avax.network/ext/bc/C/rpc',
+  43113: 'https://api.avax-test.network/ext/bc/C/rpc', // Avalanche Fuji testnet
+  43114: 'https://api.avax.network/ext/bc/C/rpc', // Avalanche mainnet
 }
 
 export const NATIVE_SYMBOLS = {
@@ -10,12 +10,14 @@ export const NATIVE_SYMBOLS = {
   43114: 'AVAX',
 }
 
-export async function signAndBroadcast(txPayload, agentKey) {
+// Signs an unsigned tx payload returned by the Paktsuite API and waits for
+// one confirmation.
+export async function signAndBroadcast(key, txPayload) {
   const rpcUrl = RPC_URLS[txPayload.chainId]
   if (!rpcUrl)
     throw new Error(`No RPC URL configured for chain ${txPayload.chainId}`)
   const provider = new ethers.JsonRpcProvider(rpcUrl)
-  const wallet = new ethers.Wallet(agentKey, provider)
+  const wallet = new ethers.Wallet(key, provider)
   const tx = await wallet.sendTransaction({
     to: txPayload.to,
     data: txPayload.data,
@@ -28,6 +30,7 @@ export async function signAndBroadcast(txPayload, agentKey) {
   return receipt.hash
 }
 
+// Reads ERC-20 balance, symbol and decimals directly from the token contract.
 export async function readTokenBalance(contractAddress, chainId, address) {
   const rpcUrl = RPC_URLS[chainId] ?? Object.values(RPC_URLS)[0]
   const provider = new ethers.JsonRpcProvider(rpcUrl)

@@ -1,33 +1,30 @@
-import { parseArgs } from 'node:util'
-import { readFileSync } from 'fs'
-import { sdkOk } from '../client.js'
-import { out, fail } from '../output.js'
+import { readFileSync } from 'node:fs'
+import { parseCommand, resolveConfig } from '../config.js'
+import { cliInit, sdkOk } from '../client.js'
+import { withTimeout } from '../messaging.js'
+import { out, print, fail } from '../output.js'
 
-export async function cmdApply(config, { sdk }, args) {
-  const { values: flags, positionals } = parseArgs({
-    args,
-    options: {
-      'cover-letter': { type: 'string' },
-    },
-    allowPositionals: true,
-    strict: true,
-  })
+export const usage = 'psilocli apply <jobId> --cover-letter <text | ->'
 
-  const jobId = positionals[0]
-  if (!jobId) fail('Usage: psilocli apply <jobId> --cover-letter <text>', 2)
-
-  let coverLetter = flags['cover-letter']
-  if (!coverLetter) fail('--cover-letter <text> is required (use - to read from stdin)', 2)
-  if (coverLetter === '-') coverLetter = readFileSync('/dev/stdin', 'utf8').trim()
-
-  const applyTimeout = new Promise((_, r) =>
-    setTimeout(() => r(new Error('apply timed out after 30s')), 30_000),
+export async function run(argv) {
+  const { values, positionals } = parseCommand(
+    argv,
+    { 'cover-letter': { type: 'string' } },
+    { positionals: true },
   )
+  const jobId = positionals[0]
+  if (!jobId) fail(`Usage: ${usage}`, 2)
+  let coverLetter = values['cover-letter']
+  if (!coverLetter) fail('--cover-letter is required (use - to read stdin)', 2)
+  if (coverLetter === '-') coverLetter = readFileSync(0, 'utf8').trim()
+  if (!coverLetter) fail('cover letter is empty', 2)
+
+  const config = resolveConfig(values)
+  const { sdk } = await cliInit(config)
   const data = sdkOk(
-    await Promise.race([sdk.job.apply(jobId, { coverLetter }), applyTimeout]),
+    await withTimeout(sdk.job.apply(jobId, { coverLetter }), 30_000, 'job.apply'),
     'job.apply',
   )
-
   if (config.json) out({ ok: true, jobId, data })
-  else process.stdout.write(`Applied to job ${jobId}\n`)
+  else print(`Applied to job ${jobId}`)
 }

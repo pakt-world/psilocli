@@ -1,247 +1,203 @@
-import { parseArgs } from 'node:util'
-import { MessagingService } from '@pakt/psilo'
-import { withMessaging } from '../messaging.js'
-import { out, fail, cliTable } from '../output.js'
+import { parseCommand, resolveConfig } from '../config.js'
+import { cliInit } from '../client.js'
+import { withMessaging, wsRequest } from '../messaging.js'
+import { out, print, note, fail, cliTable } from '../output.js'
 
-function fmtTime(iso) {
-  try {
-    const d = new Date(iso)
-    return d.toTimeString().slice(0, 8)
-  } catch {
-    return '??:??:??'
-  }
+export const usage = `psilocli messages list
+psilocli messages history <conversationId> [--limit <n>]
+psilocli messages send (--to <userId> | --conversation <id>) <text>
+psilocli messages create-group <name> <userId...>
+psilocli messages seen <conversationId>
+psilocli messages watch [--conversation <id>]`
+
+function recipientNames(recipients = []) {
+  return recipients
+    .map((r) => `${r.firstName ?? ''} ${r.lastName ?? ''}`.trim() || r._id)
+    .join(', ')
 }
 
-// ── messages list ─────────────────────────────────────────────────────────────
-
-async function subList(config, auth) {
-  await withMessaging({ url: config.url, jwt: auth.jwt }, async (messaging) => {
-    const convos = await messaging.loadConversations()
-    const list = convos?.data ?? convos ?? []
-
-    if (config.json) {
-      out(list)
-      return
-    }
-    if (list.length === 0) {
-      process.stdout.write('No conversations found.\n')
-      return
-    }
+async function listConversations(argv) {
+  const { values } = parseCommand(argv)
+  const config = resolveConfig(values)
+  const { jwt } = await cliInit(config)
+  const conversations = await withMessaging(config, jwt, async (messaging) => {
+    const data = await wsRequest(messaging, 'GET_ALL_CONVERSATIONS', {})
+    return data?.messages ?? []
+  })
+  if (config.json) {
+    out(conversations)
+  } else if (conversations.length === 0) {
+    print('No conversations found.')
+  } else {
     cliTable(
-      list.map((c) => {
-        const recipients = (c.recipients ?? [])
-          .map((r) => `${r.firstName ?? ''} ${r.lastName ?? ''}`.trim() || r._id)
-          .join(', ')
-        const preview = (c.lastMessage?.content ?? c.lastMessage?.message ?? '').slice(0, 40)
+      conversations.map((c) => {
+        const last = c.messages?.[c.messages.length - 1]
         return [
           String(c._id).slice(-8),
           c.type ?? '',
-          recipients.slice(0, 30),
-          preview,
-          c.updatedAt ? new Date(c.updatedAt).toISOString().slice(0, 16) : '',
+          (c.name ?? recipientNames(c.recipients)).slice(0, 30),
+          (last?.content ?? '').slice(0, 40),
+          c.updatedAt ?? '',
         ]
       }),
-      ['ID', 'Type', 'Recipients', 'Last message', 'Updated'],
+      ['ID', 'Type', 'With', 'Last message', 'Updated'],
     )
-  })
+  }
 }
 
-// ── messages history ──────────────────────────────────────────────────────────
-
-async function subHistory(config, auth, args) {
-  const { values: flags, positionals } = parseArgs({
-    args,
-    options: { limit: { type: 'string' } },
-    allowPositionals: true,
-    strict: true,
-  })
+async function history(argv) {
+  const { values, positionals } = parseCommand(
+    argv,
+    { limit: { type: 'string' } },
+    { positionals: true },
+  )
   const conversationId = positionals[0]
   if (!conversationId)
-    fail('Usage: psilocli messages history <conversationId> [--limit n]', 2)
+    fail('Usage: psilocli messages history <conversationId> [--limit <n>]', 2)
+  const limit = parseInt(values.limit ?? '50', 10)
 
-  await withMessaging({ url: config.url, jwt: auth.jwt }, async (messaging) => {
-    const fetched = await messaging.fetchConversation(conversationId)
-    let messages = fetched?.chats?.messages ?? fetched?.messages ?? []
-
-    const limit = flags.limit ? parseInt(flags.limit, 10) : messages.length
-    // Reverse to oldest-first, then apply limit
-    messages = messages.slice().reverse().slice(0, limit)
-
-    if (config.json) {
-      out(messages)
-      return
-    }
-    if (messages.length === 0) {
-      process.stdout.write('No messages.\n')
-      return
-    }
-    for (const m of messages) {
-      const time = fmtTime(m.createdAt)
-      const sender = m.user ?? m.sender ?? m.senderId ?? 'unknown'
-      const content = m.content ?? m.message ?? ''
-      process.stdout.write(`[${time}] ${sender}: ${content}\n`)
-    }
+  const config = resolveConfig(values)
+  const { jwt } = await cliInit(config)
+  const conversation = await withMessaging(config, jwt, async (messaging) => {
+    const data = await wsRequest(messaging, 'FETCH_CONVERSATION_MESSAGES', {
+      conversationId,
+    })
+    return data?.conversation ?? data
   })
+  const all = conversation?.chats?.messages ?? []
+  const messages = all.slice(-limit)
+  if (config.json) {
+    out(messages)
+  } else if (messages.length === 0) {
+    print('No messages in this conversation.')
+  } else {
+    for (const m of messages) {
+      print(`[${m.createdAt ?? ''}] ${m.user}: ${m.content ?? ''}`)
+    }
+    if (all.length > messages.length)
+      note(`Showing last ${messages.length} of ${all.length} messages`)
+  }
 }
 
-// ── messages send ─────────────────────────────────────────────────────────────
-
-async function subSend(config, auth, args) {
-  const { values: flags, positionals } = parseArgs({
-    args,
-    options: {
-      to:           { type: 'string' },
+async function send(argv) {
+  const { values, positionals } = parseCommand(
+    argv,
+    {
+      to: { type: 'string' },
       conversation: { type: 'string' },
     },
-    allowPositionals: true,
-    strict: true,
-  })
-
+    { positionals: true },
+  )
   const text = positionals.join(' ')
-  if (!text) fail('Usage: psilocli messages send (--to <userId> | --conversation <id>) <text>', 2)
-  if (!flags.to && !flags.conversation)
-    fail('Either --to <userId> or --conversation <id> is required', 2)
+  if ((!values.to && !values.conversation) || (values.to && values.conversation))
+    fail(
+      'Usage: psilocli messages send (--to <userId> | --conversation <id>) <text>',
+      2,
+    )
+  if (!text) fail('Message text is required', 2)
 
-  await withMessaging({ url: config.url, jwt: auth.jwt }, async (messaging) => {
-    let conversationId = flags.conversation
-
-    if (!conversationId) {
-      const convo = await Promise.race([
-        messaging.createDirectConversation(flags.to),
-        new Promise((_, r) =>
-          setTimeout(() => r(new Error('createDirectConversation timed out')), 10_000),
-        ),
-      ])
-      conversationId = convo._id
+  const config = resolveConfig(values)
+  const { jwt } = await cliInit(config)
+  const conversationId = await withMessaging(config, jwt, async (messaging) => {
+    let convId = values.conversation
+    if (!convId) {
+      const data = await wsRequest(messaging, 'INITIALIZE_CONVERSATION', {
+        type: 'DIRECT',
+        recipientId: values.to,
+      })
+      convId = (data?.conversation ?? data)?._id
+      if (!convId) throw new Error('Could not open a conversation')
     }
-
-    messaging.sendMessage({ conversationId, type: 'TEXT', message: text })
-
-    // Wait for the onBroadcast echo of our own message (matched by conversationId),
-    // with a 2s flush-delay fallback.
-    await Promise.race([
-      new Promise((resolve) => {
-        messaging.onBroadcast((msg) => {
-          if (String(msg.conversation ?? msg.conversationId) === String(conversationId)) {
-            resolve()
-          }
-        })
-      }),
-      new Promise((r) => setTimeout(r, 2_000)),
-    ])
-
-    if (config.json) out({ ok: true, conversationId })
-    else process.stdout.write(`Message sent (conversation: ${conversationId})\n`)
+    await wsRequest(messaging, 'SEND_MESSAGE', {
+      conversationId: convId,
+      type: 'TEXT',
+      message: text,
+    })
+    return convId
   })
+  if (config.json) out({ ok: true, conversationId })
+  else print(`Message sent (conversation: ${conversationId})`)
 }
 
-// ── messages create-group ─────────────────────────────────────────────────────
-
-async function subCreateGroup(config, auth, args) {
-  const { positionals } = parseArgs({
-    args,
-    options: {},
-    allowPositionals: true,
-    strict: true,
-  })
+async function createGroup(argv) {
+  const { values, positionals } = parseCommand(argv, {}, { positionals: true })
   const [name, ...userIds] = positionals
   if (!name || userIds.length === 0)
     fail('Usage: psilocli messages create-group <name> <userId...>', 2)
 
-  await withMessaging({ url: config.url, jwt: auth.jwt }, async (messaging) => {
-    const convo = await messaging.createGroupConversation(name, userIds)
-    const conversationId = convo?._id ?? convo
-
-    if (config.json) out({ ok: true, conversationId })
-    else process.stdout.write(`Group created — conversationId: ${conversationId}\n`)
+  const config = resolveConfig(values)
+  const { jwt } = await cliInit(config)
+  const conversation = await withMessaging(config, jwt, async (messaging) => {
+    const data = await wsRequest(messaging, 'INITIALIZE_CONVERSATION', {
+      type: 'GROUP',
+      recipients: userIds.map((id) => ({ user: id, role: 'USER' })),
+      name,
+    })
+    return data?.conversation ?? data
   })
+  if (config.json) out({ ok: true, conversationId: conversation._id })
+  else print(`Group "${name}" created (conversation: ${conversation._id})`)
 }
 
-// ── messages seen ─────────────────────────────────────────────────────────────
-
-async function subSeen(config, auth, args) {
-  const { positionals } = parseArgs({
-    args,
-    options: {},
-    allowPositionals: true,
-    strict: true,
-  })
+async function seen(argv) {
+  const { values, positionals } = parseCommand(argv, {}, { positionals: true })
   const conversationId = positionals[0]
-  if (!conversationId) fail('Usage: psilocli messages seen <conversationId>', 2)
+  if (!conversationId)
+    fail('Usage: psilocli messages seen <conversationId>', 2)
 
-  await withMessaging({ url: config.url, jwt: auth.jwt }, async (messaging) => {
-    await messaging.markSeen(conversationId)
-    if (config.json) out({ ok: true, conversationId })
-    else process.stdout.write(`Marked seen: ${conversationId}\n`)
-  })
-}
-
-// ── messages watch ────────────────────────────────────────────────────────────
-
-async function subWatch(config, auth, args) {
-  const { values: flags } = parseArgs({
-    args,
-    options: { conversation: { type: 'string' } },
-    strict: true,
-  })
-
-  const filterConvo = flags.conversation ?? null
-
-  // watch stays open — does not use withMessaging()
-  const messaging = new MessagingService(config.url, auth.jwt)
-  await Promise.race([
-    messaging.connect(),
-    new Promise((_, r) =>
-      setTimeout(() => r(new Error('Messaging connect timed out after 10s')), 10_000),
-    ),
-  ])
-
-  process.stderr.write(
-    filterConvo
-      ? `Watching conversation ${filterConvo} — Ctrl-C to exit\n`
-      : 'Watching all messages — Ctrl-C to exit\n',
+  const config = resolveConfig(values)
+  const { jwt } = await cliInit(config)
+  await withMessaging(config, jwt, (messaging) =>
+    wsRequest(messaging, 'MARK_MESSAGE_AS_SEEN', {
+      conversationId,
+      seen: Date.now().toString(),
+    }),
   )
-
-  messaging.onBroadcast((msg) => {
-    if (filterConvo && String(msg.conversation ?? msg.conversationId) !== String(filterConvo)) {
-      return
-    }
-    const time = fmtTime(msg.createdAt ?? new Date().toISOString())
-    const sender = msg.user ?? msg.sender ?? 'unknown'
-    const content = msg.content ?? msg.message ?? ''
-
-    if (config.json) {
-      process.stdout.write(JSON.stringify(msg) + '\n')
-    } else {
-      process.stdout.write(`[${time}] ${sender}: ${content}\n`)
-    }
-  })
-
-  process.on('SIGINT', () => {
-    try { messaging.disconnect() } catch {}
-    process.exit(0)
-  })
-
-  // Keep process alive — the socket holds the event loop open.
+  if (config.json) out({ ok: true, conversationId })
+  else print(`Conversation ${conversationId} marked seen`)
 }
 
-// ── Router ────────────────────────────────────────────────────────────────────
+// The one messages command that stays connected: prints incoming broadcasts
+// until Ctrl-C. Foreground tail, not a daemon — no reconnect logic.
+async function watch(argv) {
+  const { values } = parseCommand(argv, { conversation: { type: 'string' } })
+  const config = resolveConfig(values)
+  const { jwt, userId } = await cliInit(config)
 
-export async function cmdMessages(config, auth, args) {
-  const sub = args[0]
-  const rest = args.slice(1)
+  await withMessaging(config, jwt, (messaging) => {
+    note(
+      values.conversation
+        ? `Watching conversation ${values.conversation} — Ctrl-C to stop`
+        : 'Watching all conversations — Ctrl-C to stop',
+    )
+    messaging.onBroadcast((m) => {
+      if (values.conversation && m.conversation !== values.conversation) return
+      if (config.json) {
+        process.stdout.write(JSON.stringify(m) + '\n')
+      } else {
+        const who = m.user === userId ? 'me' : m.user
+        print(`[${m.createdAt ?? new Date().toISOString()}] ${who}: ${m.content ?? ''}`)
+      }
+    })
+    return new Promise((resolve) => {
+      process.on('SIGINT', () => resolve())
+      process.on('SIGTERM', () => resolve())
+    })
+  })
+}
 
-  switch (sub) {
-    case 'list':         return subList(config, auth)
-    case 'history':      return subHistory(config, auth, rest)
-    case 'send':         return subSend(config, auth, rest)
-    case 'create-group': return subCreateGroup(config, auth, rest)
-    case 'seen':         return subSeen(config, auth, rest)
-    case 'watch':        return subWatch(config, auth, rest)
-    default:
-      fail(
-        'Usage: psilocli messages list | history | send | create-group | seen | watch',
-        2,
-      )
-  }
+const SUBCOMMANDS = {
+  list: listConversations,
+  history,
+  send,
+  'create-group': createGroup,
+  seen,
+  watch,
+}
+
+export async function run(argv) {
+  const sub = argv[0]
+  const handler = SUBCOMMANDS[sub]
+  if (!handler) fail(`Usage:\n${usage}`, 2)
+  await handler(argv.slice(1))
 }

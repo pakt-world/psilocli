@@ -1,7 +1,7 @@
 {
   "name": "@pakt/psilocli",
   "version": "0.1.0",
-  "description": "Terminal client for the Pakt marketplace — jobs, escrow, invites, payments, reviews",
+  "description": "Terminal client for the Pakt marketplace — jobs, escrow, invites, payments, reviews, messaging",
   "type": "module",
   "bin": {
     "psilocli": "./bin/psilocli.mjs"
@@ -13,11 +13,11 @@
   "engines": {
     "node": ">=18.3"
   },
+  "repository": "github:pakt-world/psilocli",
+  "license": "BSD-3-Clause",
   "publishConfig": {
     "access": "public"
   },
-  "repository": "github:pakt-world/psilocli",
-  "license": "BSD-3-Clause",
   "dependencies": {
     "@pakt/psilo": "0.0.5",
     "ethers": "^6.17.0"
