@@ -4,10 +4,11 @@
   "description": "Persistent A2A bridge daemon connecting Psilo SDK to Docker-hosted OpenClaw agents",
   "type": "module",
   "bin": {
-    "psilocli": "./channel-pakt-daemon.mjs"
+    "psilocli": "./bin/psilocli.mjs"
   },
   "files": [
-    "channel-pakt-daemon.mjs"
+    "bin",
+    "src"
   ],
   "publishConfig": {
     "access": "public"
