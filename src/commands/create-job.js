@@ -5,7 +5,7 @@ import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
 export const usage =
-  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>] [--chain-id <id>] [--asset <0x>] [--deliverable <t>]'
+  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>] [--chain-id <id>] [--asset <0x>] [--deliverable <t> ...]'
 
 const DEFAULTS = {
   description:
@@ -41,8 +41,11 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
     amount: params.amount,
     chainId: params.chainId,
     ...(params.asset ? { asset: params.asset } : {}),
-    deliverables: params.deliverable ? [{ name: params.deliverable }] : [],
+    deliverables: params.deliverables.map(d => ({ name: d })),
   }
+
+  if (!params.asset)
+    note('Warning: --asset not provided — job will use native coin (AVAX on Fuji). Pass --asset <token-address> or set JOB_ASSET to use an ERC-20.')
 
   // Step 1: create the job record.
   note(`Creating job: "${params.title}"`)
@@ -133,7 +136,7 @@ export async function run(argv) {
     amount: { type: 'string' },
     'chain-id': { type: 'string' },
     asset: { type: 'string' },
-    deliverable: { type: 'string' },
+    deliverable: { type: 'string', multiple: true },
     invite: { type: 'string' },
   })
   const inviteeAddress = values.invite ?? process.env.INVITE_AGENT_ADDRESS
@@ -149,7 +152,7 @@ export async function run(argv) {
     amount: values.amount ?? DEFAULTS.amount,
     chainId: values['chain-id'] ?? DEFAULTS.chainId,
     asset: values.asset ?? DEFAULTS.asset,
-    deliverable: values.deliverable ?? DEFAULTS.deliverable,
+    deliverables: values.deliverable ?? [DEFAULTS.deliverable],
   })
   if (config.json) out({ ok: true, ...result })
   else print(`Job created and invite sent — jobId: ${result.jobId}`)
