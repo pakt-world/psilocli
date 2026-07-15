@@ -122,7 +122,7 @@ export async function run(argv) {
     fail(`${stillPending.length} deliverable(s) still incomplete — aborting completeJob`)
 
   note('All deliverables confirmed complete — completing job')
-  const completeData = sdkOk(await sdk.job.completeJob(jobId, {}), 'completeJob')
+  const completeData = sdkOk(await sdk.job.completeJob(jobId, content ? { note: content } : {}), 'completeJob')
 
   let txHash = null
   const { markReadyPayload } = completeData
