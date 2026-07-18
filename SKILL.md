@@ -95,6 +95,50 @@ out. When the SDK adopts acks, switch back and delete `wsRequest`.
 `onBroadcast` events until SIGINT. Keep it that way — no reconnect loops,
 no handlers with side effects.
 
+## Auth commands (`sdk.auth`)
+
+`auth` commands do **not** use `cliInit()`. They instantiate a bare,
+unauthenticated SDK instance directly (`PsiloSDK.init({ baseUrl })`), because
+these commands *are* the authentication flow.
+
+| Sub-verb   | SDK calls                                          | Required flags                      |
+| ---------- | -------------------------------------------------- | ------------------------------------ |
+| `register` | request → sign → validate → onboard? → re-auth    | `--key`, `--address`                 |
+| `request`  | `web3AuthRequest(address)`                         | `--address`                          |
+| `validate` | `web3AuthValidate(signed, tempToken, tokenId?)`    | `--signed-message`, `--temp-token`   |
+| `onboard`  | `web3AuthOnboard(tempToken, first, last, email)`   | `--temp-token`, `--email`            |
+
+`auth register` handles both paths: existing wallet (returns JWT immediately)
+and first-login onboard (full flow with user-supplied name/email). `--email`
+defaults to `address@pakt.internal` with a stderr warning when omitted.
+
+## Upload service (`sdk.upload`)
+
+```
+upload <path> [--private] [--type <mime>]   Upload a file (public or private)
+upload list [--page <n>] [--limit <n>] [--name <s>]  List uploaded files
+upload get <id>                             Fetch a single FileRecord
+upload url <id>                             Get a presigned download URL
+```
+
+Allowed MIME types are enforced client-side before the request is sent (see
+`ALLOWED_MIME_TYPES` in `src/commands/upload.js`). Extension → MIME detection
+covers common formats; `--type` overrides it. An unknown extension with no
+`--type` is a usage error (exit 2).
+
+`--profile-image` and `--bg-image` on `user update` take the `_id` of an
+uploaded `FileRecord` — upload first, then pass the returned ID.
+
+## User service (`sdk.user`)
+
+```
+user update [--first-name <s>] [--last-name <s>] [--username <s>]
+            [--profile-image <upload-id>] [--bg-image <upload-id>] [--private]
+```
+
+Only explicitly-supplied flags are included in the PATCH payload — absent
+flags are never sent so the API treats them as no-ops.
+
 ## Configuration
 
 | Flag            | Env var             | Default                         |

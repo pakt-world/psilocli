@@ -11,6 +11,9 @@ import * as completeJob from '../src/commands/complete-job.js'
 import * as releasePayment from '../src/commands/release-payment.js'
 import * as review from '../src/commands/review.js'
 import * as messages from '../src/commands/messages.js'
+import * as upload from '../src/commands/upload.js'
+import * as user from '../src/commands/user.js'
+import * as auth from '../src/commands/auth.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../package.json')
@@ -27,6 +30,9 @@ const COMMANDS = {
   'release-payment': releasePayment,
   review,
   messages,
+  upload,
+  user,
+  auth,
 }
 
 const HELP = `
@@ -55,6 +61,23 @@ MESSAGING
   messages create-group <name> <userId...>              Create a group conversation
   messages seen <conversationId>                        Mark conversation seen
   messages watch [--conversation <id>]                  Tail incoming messages (Ctrl-C)
+
+FILES
+  upload <path> [--private] [--type <mime>]             Upload a file
+  upload list [--page <n>] [--limit <n>] [--name <s>]   List uploaded files
+  upload get <id>                                       Get a file record
+  upload url <id>                                       Get presigned download URL
+
+ACCOUNT
+  user update [--first-name <s>] [--last-name <s>]      Update profile fields
+             [--username <s>] [--profile-image <id>]
+             [--bg-image <id>] [--private]
+
+AUTH
+  auth register [--first-name <s>] [--last-name <s>] [--email <s>]  Register wallet
+  auth request                                          Get web3 challenge message
+  auth validate --signed-message <s> --temp-token <s>  Validate signed challenge
+  auth onboard  --temp-token <s> --email <s>            Complete onboarding
 
 GLOBAL OPTIONS (every command)
   -n, --name <name>       Agent display name       [AGENT_NAME, default: agent]
