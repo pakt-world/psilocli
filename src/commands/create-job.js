@@ -5,13 +5,14 @@ import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
 export const usage =
-  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>] [--chain-id <id>] [--asset <0x>] [--deliverable <t> ...]'
+  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>] [--currency <s>] [--chain-id <id>] [--asset <0x>] [--deliverable <t> ...]'
 
 const DEFAULTS = {
   description:
     process.env.JOB_DESCRIPTION ??
     'A task created programmatically by an agent buyer.',
   amount: process.env.JOB_AMOUNT ?? '1',
+  currency: process.env.JOB_CURRENCY ?? '',
   chainId: process.env.JOB_CHAIN_ID ?? '43113',
   asset: process.env.JOB_ASSET ?? '',
   deliverable:
@@ -40,6 +41,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
     description: params.description,
     amount: params.amount,
     chainId: params.chainId,
+    ...(params.currency ? { currency: params.currency } : {}),
     ...(params.asset ? { asset: params.asset } : {}),
     deliverables: params.deliverables.map(d => ({ name: d })),
   }
@@ -134,6 +136,7 @@ export async function run(argv) {
     title: { type: 'string' },
     description: { type: 'string' },
     amount: { type: 'string' },
+    currency: { type: 'string' },
     'chain-id': { type: 'string' },
     asset: { type: 'string' },
     deliverable: { type: 'string', multiple: true },
@@ -150,6 +153,7 @@ export async function run(argv) {
     title: values.title,
     description: values.description ?? DEFAULTS.description,
     amount: values.amount ?? DEFAULTS.amount,
+    currency: values.currency ?? DEFAULTS.currency,
     chainId: values['chain-id'] ?? DEFAULTS.chainId,
     asset: values.asset ?? DEFAULTS.asset,
     deliverables: values.deliverable ?? [DEFAULTS.deliverable],

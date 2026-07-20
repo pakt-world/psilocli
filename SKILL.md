@@ -150,7 +150,7 @@ flags are never sent so the API treats them as no-ops.
 | `--json`        | —                   | off                             |
 
 `create-job` requires `--title` and honors `INVITE_AGENT_ADDRESS`,
-`JOB_DESCRIPTION`, `JOB_AMOUNT`, `JOB_CHAIN_ID`, `JOB_ASSET`,
+`JOB_DESCRIPTION`, `JOB_AMOUNT`, `JOB_CURRENCY`, `JOB_CHAIN_ID`, `JOB_ASSET`,
 `JOB_DELIVERABLE` as flag fallbacks.
 
 ## Output discipline

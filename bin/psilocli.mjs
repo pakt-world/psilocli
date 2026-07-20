@@ -48,6 +48,7 @@ COMMANDS
   list invites                                          List received invites
   apply <jobId> --cover-letter <text | ->               Apply to a job (- reads stdin)
   create-job --title <t> --amount <n> --invite <0x>     Create, fund escrow, and invite
+             [--currency <s>] [--chain-id <id>] [--asset <0x>]
   accept-invite <jobId> <inviteId>                      Accept a job invite (signs tx)
   decline-invite <jobId> <inviteId>                     Decline a job invite
   complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job
