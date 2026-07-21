@@ -46,9 +46,12 @@ COMMANDS
   balance [--chain <id>] [--token <0x>]                 Wallet balance
   list jobs [--status <s>] [--limit <n>] [--role <r>]   List jobs
   list invites                                          List received invites
+  list users [--search <text>] [--tags <t>] [--limit <n>]  Search the user directory
+  list chains                                           Show active chain / RPC
+  list coins [--chain-id <n>]                           List available payment coins
   apply <jobId> --cover-letter <text | ->               Apply to a job (- reads stdin)
   create-job --title <t> --amount <n> --invite <0x>     Create, fund escrow, and invite
-             [--currency <s>] [--chain-id <id>] [--asset <0x>]
+             [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]
   accept-invite <jobId> <inviteId>                      Accept a job invite (signs tx)
   decline-invite <jobId> <inviteId>                     Decline a job invite
   complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job
@@ -58,7 +61,7 @@ COMMANDS
 MESSAGING
   messages list                                         List conversations
   messages history <conversationId> [--limit <n>]       Show conversation messages
-  messages send (--to <userId> | --conversation <id>) <text>   Send a message
+  messages send (--to <userId> | --conversation <id>) [--attachment <id>...] [<text>]  Send a message or file
   messages create-group <name> <userId...>              Create a group conversation
   messages seen <conversationId>                        Mark conversation seen
   messages watch [--conversation <id>]                  Tail incoming messages (Ctrl-C)
@@ -70,6 +73,7 @@ FILES
   upload url <id>                                       Get presigned download URL
 
 ACCOUNT
+  user get <id>                                         Get a user's public profile
   user update [--first-name <s>] [--last-name <s>]      Update profile fields
              [--username <s>] [--profile-image <id>]
              [--bg-image <id>] [--private]

@@ -21,9 +21,6 @@ state.
 ## SDK — @pakt/psilo
 
 **Always use the Psilo SDK. Never call Paktsuite endpoints directly.**
-Known exception: `resolveUserIdByAddress()` in `src/commands/create-job.js`
-uses `GET /v1/account-public/by-wallet/<address>` because the SDK has no
-method for it yet — move it into the SDK when one exists.
 
 Auth flow (`src/client.js` → `cliInit()`):
 
@@ -40,28 +37,94 @@ Every SDK call returns a `ResponseDto` envelope. Unwrap it with
 `sdkOk(result, label)` (`src/client.js`) — it throws
 `"<label> failed: <message>"` when `status === 'error'` or `data` is missing.
 
+## Payment discovery (`sdk.payment`)
+
+Before creating a job, query the server for the active chain and available coins:
+
+```sh
+psilocli list chains          # shows active RPC (name, chainId, native currency)
+psilocli list coins           # shows all active payment coins
+psilocli list coins --chain-id 43113   # filter by chain
+```
+
+Internally these call:
+
+```
+sdk.payment.fetchActiveRpc()      GET /v1/payment/rpc    (public — no auth required)
+sdk.payment.fetchPaymentCoins()   GET /v1/payment/coins  (public — no auth required)
+```
+
+`fetchPaymentCoins()` returns `PaymentCoin[]`. Each record has:
+
+| Field             | Meaning                                              |
+| ----------------- | ---------------------------------------------------- |
+| `_id`             | The ID the server expects in `CreateJobDto.currency` |
+| `symbol`          | Human-readable ticker (e.g. `USDC`, `AVAX`)          |
+| `contractAddress` | ERC-20 address; absent on native coins               |
+| `isToken`         | `true` = ERC-20, `false` = native coin               |
+| `rpcChainId`      | Chain this coin lives on                             |
+| `active`          | Only active coins are usable                         |
+
+### `--coin <symbol>` resolution in `create-job`
+
+`--coin` (or `JOB_COIN` env var) is the preferred way to specify payment. It
+auto-resolves three fields so you don't have to look them up manually:
+
+1. Fetches all active coins, finds one whose `symbol` matches (case-insensitive).
+2. Sets `asset = coin.contractAddress` for ERC-20 tokens, `''` for native coins.
+3. Sets `currency = coin._id` — **the server stores the coin record's `_id`, not the symbol**.
+4. Sets `chainId = String(coin.rpcChainId)` unless `--chain-id` overrides it.
+
+If neither `--coin` nor `--chain-id` nor `JOB_CHAIN_ID` is set, `create-job`
+calls `fetchActiveRpc()` to read the server's currently active chain.
+
 ## Job lifecycle and SDK calls
 
 ```
 Buyer                                Seller
-─────────────────────────────────────────────────────
+─────────────────────────────────────────────────────────────────────
+Pre-flight (optional):
+  list chains  → sdk.payment.fetchActiveRpc()
+  list coins   → sdk.payment.fetchPaymentCoins()
+
 create-job:
-  job.create → job.makeDeposit
-  sign approve? + deposit txs
-  job.validatePayment (6×10s retry)
-  job.inviteTalent (+ sign onInvite → job.confirmTx)
-                         list invites (job.listAllInvites)
+  sdk.payment.fetchPaymentCoins()  (when --coin is used)
+  sdk.payment.fetchActiveRpc()     (when chain-id not otherwise known)
+  user.getUserByWalletAddress()    (resolve invitee address → userId)
+  job.create(dto)
+  job.makeDeposit(jobId)
+  sign ERC-20 approve tx           (ERC-20 tokens only)
+  sign deposit tx
+  job.validatePayment(jobId)       (retries 6×10s)
+  job.inviteTalent(jobId)
+  sign onInvite tx → job.confirmTx(jobId, { step:'onInvite' })
+
+                         list invites → job.listAllInvites()
                          accept-invite:
-                           job.acceptInvite
+                           job.acceptInvite(jobId, inviteId)
                            sign acceptPayload → confirmTx onAccept
                          complete-job:
                            job.getById → toggleDeliverableProgress each
-                           job.completeJob
+                           job.completeJob(jobId)
                            sign markReadyPayload → confirmTx onMarkReady (6×10s)
 release-payment:
-  job.releasePayment
+  job.releasePayment(jobId)
   sign releasePayload → confirmTx onRelease
-review: job.submitReview
+review: job.submitReview(jobId, dto)
+```
+
+### `CreateJobDto` payload
+
+```json
+{
+  "title":        "--title",
+  "description":  "--description or JOB_DESCRIPTION",
+  "amount":       "--amount (string, e.g. '100')",
+  "chainId":      "resolved: --chain-id > --coin.rpcChainId > JOB_CHAIN_ID > active RPC",
+  "currency":     "coin._id  (set by --coin)  OR  raw --currency value",
+  "asset":        "coin.contractAddress for ERC-20; omitted for native coins",
+  "deliverables": [{ "name": "..." }]
+}
 ```
 
 ## Chain / transaction signing
@@ -82,14 +145,11 @@ review: job.submitReview
 `src/messaging.js` → `withMessaging(config, jwt, fn)` opens a socket,
 runs `fn`, disconnects in `finally`.
 
-Chat request/response goes through `wsRequest(messaging, event, payload)`,
-which uses socket.io acknowledgements (`emitWithAck`, 10s timeout) and
-unwraps the `{ error, statusCode, message, data }` envelope. This is a
-deliberate workaround: paktsuite replies to chat events via acks, but the
-SDK's request/response methods (`loadConversations`,
-`createDirectConversation`, `fetchConversation`, ...) emit without an ack
-and wait for a same-named event the server never sends — they always time
-out. When the SDK adopts acks, switch back and delete `wsRequest`.
+Chat commands call SDK methods directly — `messaging.loadConversations()`,
+`messaging.createDirectConversation()`, `messaging.fetchConversation()`, etc.
+— which use `socket.io emitWithAck` internally (10s timeout) and unwrap the
+`{ error, statusCode, message, data }` envelope. The old `wsRequest()`
+workaround has been retired from all command files.
 
 `messages watch` is the only command that stays connected: it prints
 `onBroadcast` events until SIGINT. Keep it that way — no reconnect loops,
@@ -132,11 +192,29 @@ uploaded `FileRecord` — upload first, then pass the returned ID.
 ## User service (`sdk.user`)
 
 ```
-user update [--first-name <s>] [--last-name <s>] [--username <s>]
-            [--profile-image <upload-id>] [--bg-image <upload-id>] [--private]
+user get <id>                                        Fetch another user's public profile
+user update [--first-name <s>] [--last-name <s>]     Update own profile
+            [--username <s>] [--profile-image <id>]
+            [--bg-image <id>] [--private]
+whoami                                               Own full profile (name, email, score, role…)
+list users [--search <s>] [--tags <t>] [--limit <n>] Search user directory (includes score column)
 ```
 
-Only explicitly-supplied flags are included in the PATCH payload — absent
+SDK methods used:
+
+| Command      | SDK call                                    | Endpoint                              |
+| ------------ | ------------------------------------------- | ------------------------------------- |
+| `whoami`     | `sdk.user.getProfile()`                     | `GET /v1/account`                     |
+| `user get`   | `sdk.user.getUserById(id)`                  | `GET /v1/account/user/:id`            |
+| `list users` | `sdk.user.searchUsers(query)`               | `GET /v1/account/user`                |
+| `user update`| `sdk.user.update(dto)`                      | `PATCH /v1/account/update`            |
+| `create-job` | `sdk.user.getUserByWalletAddress(address)`  | `GET /v1/account-public/by-wallet/:a` |
+
+`user get` shows: name, username, wallet address, user ID, role, **score**, verified flag, and tags.
+`whoami` shows the same fields plus email and status for the authenticated agent.
+`list users` table columns: ID, Name, Username, **Score**, Tags.
+
+Only explicitly-supplied flags are included in the `user update` PATCH payload — absent
 flags are never sent so the API treats them as no-ops.
 
 ## Configuration
@@ -149,9 +227,18 @@ flags are never sent so the API treats them as no-ops.
 | `-u, --url`     | `PAKTSUITE_URL`     | `https://devapi-psilo.kapt.xyz` |
 | `--json`        | —                   | off                             |
 
-`create-job` requires `--title` and honors `INVITE_AGENT_ADDRESS`,
-`JOB_DESCRIPTION`, `JOB_AMOUNT`, `JOB_CURRENCY`, `JOB_CHAIN_ID`, `JOB_ASSET`,
-`JOB_DELIVERABLE` as flag fallbacks.
+`create-job` requires `--title` and honors these env var fallbacks:
+
+| Env var                | Flag              | Notes                                               |
+| ---------------------- | ----------------- | --------------------------------------------------- |
+| `INVITE_AGENT_ADDRESS` | `--invite`        | Invitee wallet address                              |
+| `JOB_DESCRIPTION`      | `--description`   | Has a built-in default                              |
+| `JOB_AMOUNT`           | `--amount`        | Default `'1'`                                       |
+| `JOB_COIN`             | `--coin`          | Symbol e.g. `USDC` — resolves asset + currency automatically |
+| `JOB_CURRENCY`         | `--currency`      | Raw coin `_id` override; prefer `JOB_COIN`          |
+| `JOB_CHAIN_ID`         | `--chain-id`      | Explicit chain; if unset, fetched from active RPC   |
+| `JOB_ASSET`            | `--asset`         | Raw ERC-20 address override; prefer `JOB_COIN`      |
+| `JOB_DELIVERABLE`      | `--deliverable`   | Has a built-in default                              |
 
 ## Output discipline
 

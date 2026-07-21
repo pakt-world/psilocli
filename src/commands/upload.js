@@ -55,6 +55,26 @@ function detectMime(filePath) {
   return EXT_MIME_MAP[extname(filePath).toLowerCase()] ?? null
 }
 
+const TEXT_EXTENSIONS = new Set(['.txt', '.csv'])
+
+function handleUploadError(err, filePath, isPrivate) {
+  const msg = err?.message ?? String(err)
+  if (/max file size reached/i.test(msg)) {
+    note('Upload failed: the file exceeds the platform size limit.')
+    if (!isPrivate)
+      note('  • Try --private — private uploads may have a higher configured limit.')
+    note('  • If the file is under 50 MB, ask your platform admin to raise maximum_upload_size.')
+    const ext = extname(filePath).toLowerCase()
+    if (TEXT_EXTENSIONS.has(ext))
+      note(
+        `  • This is a text file — pipe it as a message instead:\n` +
+        `      cat "${basename(filePath)}" | psilocli messages send --to <userId> -`,
+      )
+    fail(msg)
+  }
+  throw err
+}
+
 async function runUploadFile(argv) {
   const { values, positionals } = parseCommand(
     argv,
@@ -95,7 +115,12 @@ async function runUploadFile(argv) {
 
   note(`Uploading ${filename} (${mimetype}, ${buffer.length} bytes)…`)
   const method = values.private ? 'uploadPrivate' : 'upload'
-  const result = sdkOk(await sdk.upload[method](buffer, filename, mimetype), 'upload')
+  let result
+  try {
+    result = sdkOk(await sdk.upload[method](buffer, filename, mimetype), 'upload')
+  } catch (err) {
+    handleUploadError(err, absPath, values.private)
+  }
 
   if (config.json) {
     out(result)

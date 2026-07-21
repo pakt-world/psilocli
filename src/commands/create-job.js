@@ -5,35 +5,34 @@ import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
 export const usage =
-  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>] [--currency <s>] [--chain-id <id>] [--asset <0x>] [--deliverable <t> ...]'
+  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>]\n' +
+  '                    [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]\n' +
+  '                    [--deliverable <t> ...]'
 
 const DEFAULTS = {
   description:
     process.env.JOB_DESCRIPTION ??
     'A task created programmatically by an agent buyer.',
-  amount: process.env.JOB_AMOUNT ?? '1',
-  currency: process.env.JOB_CURRENCY ?? '',
-  chainId: process.env.JOB_CHAIN_ID ?? '43113',
-  asset: process.env.JOB_ASSET ?? '',
+  amount:      process.env.JOB_AMOUNT      ?? '1',
+  coin:        process.env.JOB_COIN        ?? '',
+  currency:    process.env.JOB_CURRENCY    ?? '',
+  chainId:     process.env.JOB_CHAIN_ID    ?? '',   // empty → query server active RPC
+  asset:       process.env.JOB_ASSET       ?? '',
   deliverable:
     process.env.JOB_DELIVERABLE ??
     'Send the buyer a message confirming job acceptance and your readiness to deliver.',
 }
 
-async function resolveUserIdByAddress(baseUrl, address) {
-  const res = await fetch(
-    `${baseUrl}/v1/account-public/by-wallet/${encodeURIComponent(address)}`,
-  )
-  if (!res.ok) throw new Error(`by-wallet lookup failed: ${res.status}`)
-  const body = await res.json()
-  const userId = body?.data?._id ?? body?._id
+async function resolveUserIdByAddress(sdk, address) {
+  const result = sdkOk(await sdk.user.getUserByWalletAddress(address), 'user.getUserByWalletAddress')
+  const userId = result?._id
   if (!userId) throw new Error(`No user found for address ${address}`)
   return String(userId)
 }
 
 export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
   note(`Resolving user ID for invitee address: ${inviteeAddress}`)
-  const inviteeUserId = await resolveUserIdByAddress(config.url, inviteeAddress)
+  const inviteeUserId = await resolveUserIdByAddress(sdk, inviteeAddress)
   note(`Invitee user ID: ${inviteeUserId}`)
 
   const createDto = {
@@ -45,9 +44,6 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
     ...(params.asset ? { asset: params.asset } : {}),
     deliverables: params.deliverables.map(d => ({ name: d })),
   }
-
-  if (!params.asset)
-    note('Warning: --asset not provided — job will use native coin (AVAX on Fuji). Pass --asset <token-address> or set JOB_ASSET to use an ERC-20.')
 
   // Step 1: create the job record.
   note(`Creating job: "${params.title}"`)
@@ -133,14 +129,15 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
 
 export async function run(argv) {
   const { values } = parseCommand(argv, {
-    title: { type: 'string' },
-    description: { type: 'string' },
-    amount: { type: 'string' },
-    currency: { type: 'string' },
-    'chain-id': { type: 'string' },
-    asset: { type: 'string' },
-    deliverable: { type: 'string', multiple: true },
-    invite: { type: 'string' },
+    title:        { type: 'string' },
+    description:  { type: 'string' },
+    amount:       { type: 'string' },
+    coin:         { type: 'string' },
+    currency:     { type: 'string' },
+    'chain-id':   { type: 'string' },
+    asset:        { type: 'string' },
+    deliverable:  { type: 'string', multiple: true },
+    invite:       { type: 'string' },
   })
   const inviteeAddress = values.invite ?? process.env.INVITE_AGENT_ADDRESS
   if (!inviteeAddress)
@@ -149,13 +146,48 @@ export async function run(argv) {
 
   const config = resolveConfig(values)
   const { sdk } = await cliInit(config)
+
+  // --- resolve coin → asset + currency + chainId ---
+  let asset    = values.asset    ?? DEFAULTS.asset
+  let currency = values.currency ?? DEFAULTS.currency
+  let chainId  = values['chain-id'] || null
+
+  const coinSymbol = values.coin ?? DEFAULTS.coin
+  if (coinSymbol) {
+    const allCoins = sdkOk(await sdk.payment.fetchPaymentCoins(), 'payment.fetchPaymentCoins')
+    const coin = (Array.isArray(allCoins) ? allCoins : []).find(
+      c => c.active && c.symbol.toLowerCase() === coinSymbol.toLowerCase(),
+    )
+    if (!coin)
+      fail(
+        `Coin "${coinSymbol}" not found or inactive.\n` +
+        'Run "psilocli list coins" to see available options.',
+        2,
+      )
+    asset    = coin.isToken ? (coin.contractAddress ?? '') : ''
+    currency = coin._id
+    if (!chainId) chainId = String(coin.rpcChainId)
+    note(`Coin: ${coin.name} (${coin.symbol})${coin.isToken ? ` — contract ${asset}` : ' — native'}`)
+  }
+
+  if (!chainId) {
+    if (DEFAULTS.chainId) {
+      chainId = DEFAULTS.chainId
+    } else {
+      const rpc = sdkOk(await sdk.payment.fetchActiveRpc(), 'payment.fetchActiveRpc')
+      chainId = rpc?.rpcChainId ? String(rpc.rpcChainId) : '43113'
+      note(`Active chain: ${rpc?.rpcName ?? chainId} (chainId ${chainId})`)
+    }
+  }
+  // -------------------------------------------------
+
   const result = await createJobAndInvite(sdk, config, inviteeAddress, {
-    title: values.title,
+    title:       values.title,
     description: values.description ?? DEFAULTS.description,
-    amount: values.amount ?? DEFAULTS.amount,
-    currency: values.currency ?? DEFAULTS.currency,
-    chainId: values['chain-id'] ?? DEFAULTS.chainId,
-    asset: values.asset ?? DEFAULTS.asset,
+    amount:      values.amount      ?? DEFAULTS.amount,
+    currency,
+    chainId,
+    asset,
     deliverables: values.deliverable ?? [DEFAULTS.deliverable],
   })
   if (config.json) out({ ok: true, ...result })

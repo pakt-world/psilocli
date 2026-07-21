@@ -1,10 +1,36 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
-import { out, print, fail, cliTable } from '../output.js'
+import { out, print, note, fail, cliTable } from '../output.js'
 
 export const usage =
+  'psilocli user get <id>\n' +
   'psilocli user update [--first-name <s>] [--last-name <s>] [--username <s>]\n' +
   '                     [--profile-image <id>] [--bg-image <id>] [--private]'
+
+async function runGet(argv) {
+  const { values, positionals } = parseCommand(argv, {}, { positionals: true })
+  const id = positionals[0]
+  if (!id) fail('Usage: psilocli user get <id>', 2)
+
+  const config = resolveConfig(values)
+  const { sdk } = await cliInit(config)
+
+  const profile = sdkOk(await sdk.user.getUserById(id), 'user.getUserById')
+
+  if (config.json) {
+    out(profile)
+  } else {
+    print(`Name:     ${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trimEnd())
+    print(`Username: ${profile.userName ?? ''}`)
+    print(`Address:  ${profile.walletAddress ?? ''}`)
+    print(`User ID:  ${profile._id}`)
+    print(`Role:     ${profile.role ?? ''}`)
+    print(`Score:    ${profile.score ?? 0}`)
+    print(`Verified: ${profile.isVerified ? 'yes' : 'no'}`)
+    if (profile.profile?.talent?.tags?.length)
+      print(`Tags:     ${profile.profile.talent.tags.join(', ')}`)
+  }
+}
 
 async function runUpdate(argv) {
   const { values } = parseCommand(argv, {
@@ -54,6 +80,7 @@ async function runUpdate(argv) {
 export async function run(argv) {
   const sub = argv[0]
 
+  if (sub === 'get')    return runGet(argv.slice(1))
   if (sub === 'update') return runUpdate(argv.slice(1))
 
   fail(`Usage:\n${usage}`, 2)
