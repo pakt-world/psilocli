@@ -20,10 +20,13 @@ export async function run(argv) {
     })
     const config = resolveConfig(values)
     const { sdk } = await cliInit(config)
+    const role = values.role ?? 'buyer'
+    if (!values.role)
+      process.stderr.write('note: defaulting to --role buyer. Pass --role seller to see seller jobs.\n')
     const listOpts = {
       status: values.status ?? 'open',
       limit: parseInt(values.limit ?? '20', 10),
-      ...(values.role ? { role: values.role } : {}),
+      role,
     }
     const result = sdkOk(await sdk.job.list(listOpts), 'job.list')
     const jobs = result?.data ?? (Array.isArray(result) ? result : [])
@@ -60,13 +63,27 @@ export async function run(argv) {
       cliTable(
         invites.map((i) => [
           String(i._id).slice(-8),
-          (i.job?.title ?? '').slice(0, 40),
+          String(i.job?._id ?? i.job ?? '').slice(-8),
+          (i.job?.title ?? '').slice(0, 36),
           i.direction ?? '',
           i.status ?? '',
           String(i.sender?._id ?? '').slice(-8),
         ]),
-        ['ID', 'Job Title', 'Dir', 'Status', 'From'],
+        ['ID', 'Job ID', 'Job Title', 'Dir', 'Status', 'From'],
       )
+      // Warn when multiple pending invites share the same sender (duplicate buyer)
+      const pendingBySender = {}
+      for (const i of invites) {
+        if (i.status !== 'pending') continue
+        const senderId = String(i.sender?._id ?? '')
+        if (!senderId) continue
+        pendingBySender[senderId] = (pendingBySender[senderId] ?? 0) + 1
+      }
+      const duplicates = Object.entries(pendingBySender).filter(([, n]) => n > 1)
+      if (duplicates.length > 0)
+        process.stderr.write(
+          `note: ${duplicates.length} buyer(s) sent multiple pending invites — check Job ID column before accepting.\n`,
+        )
     }
     return
   }

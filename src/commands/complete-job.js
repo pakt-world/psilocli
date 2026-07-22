@@ -65,6 +65,8 @@ export async function run(argv) {
     fail(`Not the seller of "${job.title}" (seller: ${jobSeller})`)
 
   const allDeliverables = job.deliverables ?? []
+  if (allDeliverables.length === 0)
+    note('No deliverables on this job — skipping deliverable completion step.')
   const pending = allDeliverables.filter((d) => d.status !== 'completed')
   note(
     `Job "${job.title}" — ${pending.length}/${allDeliverables.length} deliverable(s) pending`,

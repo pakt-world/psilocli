@@ -1,5 +1,5 @@
 import { parseCommand, resolveConfig } from '../config.js'
-import { cliInit } from '../client.js'
+import { cliInit, sdkOk } from '../client.js'
 import { withMessaging } from '../messaging.js'
 import { out, print, note, fail, cliTable } from '../output.js'
 
@@ -103,7 +103,16 @@ async function send(argv) {
                 :                            'TEXT'
 
   const config = resolveConfig(values)
-  const { jwt } = await cliInit(config)
+  const { sdk, jwt } = await cliInit(config)
+
+  // Pre-flight: verify every attachment ID exists before opening the socket
+  for (const attachmentId of attachments) {
+    sdkOk(
+      await sdk.upload.getUpload(attachmentId),
+      `upload.getUpload(${attachmentId})`,
+    )
+  }
+
   const conversationId = await withMessaging(config, jwt, async (messaging) => {
     let convId = values.conversation
     if (!convId) {

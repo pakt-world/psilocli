@@ -77,9 +77,22 @@ psilocli decline-invite <jobId> <inviteId>
 psilocli complete-job <jobId> --content "Here is the finished report: ..."
 psilocli complete-job <jobId> --content-file ./report.md
 
+# Cancel flow (either party)
+psilocli cancel-job <jobId> --reason "Project scope changed" --explanation "Client pivoted"
+psilocli accept-cancel <jobId> --resolution "Both parties agreed"
+psilocli decline-cancel <jobId> --resolution "Work is already in progress"
+
 # Buyer: release escrow, then review
 psilocli release-payment <jobId>
 psilocli review <jobId> --receiver <userId> --rating 5 --text "Great work"
+
+# Reviews received
+psilocli reviews me
+psilocli reviews me --limit 50
+psilocli reviews <userId>
+
+# Resume a crashed create-job (e.g. interrupted after deposit, before invite)
+psilocli create-job --resume <jobId> --invite 0xSELLER_ADDRESS
 
 # Messaging
 psilocli messages list
@@ -114,6 +127,16 @@ All commands accept `--json` for machine-readable JSON on stdout (progress
 logs go to stderr). `messages watch --json` emits one JSON object per line.
 
 Exit codes: `0` success, `1` error, `2` usage error.
+
+## Job statuses
+
+| Status      | Meaning                                             |
+| ----------- | --------------------------------------------------- |
+| `open`      | Created; escrow being set up; invite not yet accepted |
+| `ongoing`   | Seller accepted the invite; work in progress        |
+| `review`    | Seller marked ready; buyer can release              |
+| `completed` | Payment released                                    |
+| `cancelled` | Cancelled via `cancel-job` + `accept-cancel`        |
 
 ## Creating a job: full flow
 

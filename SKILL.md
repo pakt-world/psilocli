@@ -99,6 +99,21 @@ create-job:
   job.inviteTalent(jobId)
   sign onInvite tx → job.confirmTx(jobId, { step:'onInvite' })
 
+create-job --resume <jobId>:        (crash recovery)
+  job.getById(jobId)               check status ≠ cancelled/completed
+  job.getEscrowStatus(jobId)       → onChain.deposited?
+    false → resume from makeDeposit + sign + validatePayment
+    true  → skip deposit
+  if status not ongoing/review/completed → inviteTalent (needs --invite)
+
+cancel-job:
+  job.getCancelRequest(jobId)      pre-flight: reject if already pending
+  job.requestCancel(jobId, dto)
+
+                         accept-cancel / decline-cancel:
+                           job.acceptCancel(jobId, dto?)
+                           job.declineCancel(jobId, dto?)
+
                          list invites → job.listAllInvites()
                          accept-invite:
                            job.acceptInvite(jobId, inviteId)
@@ -111,7 +126,20 @@ release-payment:
   job.releasePayment(jobId)
   sign releasePayload → confirmTx onRelease
 review: job.submitReview(jobId, dto)
+reviews: job.getReceivedReviews(userId, { limit?, page? })
 ```
+
+### Job status vocabulary
+
+| Status      | Meaning                                           |
+| ----------- | ------------------------------------------------- |
+| `open`      | Created; escrow being set up; invite not yet accepted |
+| `ongoing`   | Seller accepted the invite; work in progress      |
+| `review`    | Seller marked ready; awaiting buyer release       |
+| `completed` | Payment released                                  |
+| `cancelled` | Cancelled via `cancel-job` / `accept-cancel`      |
+
+The stats aggregate also tracks `invited` as a legacy status; treat it as equivalent to `open` if encountered.
 
 ### `CreateJobDto` payload
 

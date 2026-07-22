@@ -18,7 +18,18 @@ export async function run(argv) {
   )
   let txHash = null
   if (acceptData?.acceptPayload) {
-    txHash = await signAndBroadcast(config.key, acceptData.acceptPayload)
+    try {
+      txHash = await signAndBroadcast(config.key, acceptData.acceptPayload)
+    } catch (err) {
+      const msg = err.message ?? ''
+      if (msg.includes('transfer amount exceeds balance') || msg.includes('insufficient funds'))
+        fail(
+          `Transaction failed: insufficient balance.\n` +
+          `Run "psilocli balance" to check your wallet balance before accepting.`,
+          1,
+        )
+      throw err
+    }
     sdkOk(
       await sdk.job.confirmTx(jobId, { step: 'onAccept', txHash }),
       'confirmTx onAccept',
