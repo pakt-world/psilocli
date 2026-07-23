@@ -5,34 +5,35 @@ import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
 export const usage =
-  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>] [--chain-id <id>] [--asset <0x>] [--deliverable <t> ...]'
+  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>]\n' +
+  '                    [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]\n' +
+  '                    [--deliverable <t> ...]\n' +
+  'psilocli create-job --resume <jobId> --invite <0x>  Resume a crashed create-job flow'
 
 const DEFAULTS = {
   description:
     process.env.JOB_DESCRIPTION ??
     'A task created programmatically by an agent buyer.',
-  amount: process.env.JOB_AMOUNT ?? '1',
-  chainId: process.env.JOB_CHAIN_ID ?? '43113',
-  asset: process.env.JOB_ASSET ?? '',
+  amount:      process.env.JOB_AMOUNT      ?? '1',
+  coin:        process.env.JOB_COIN        ?? '',
+  currency:    process.env.JOB_CURRENCY    ?? '',
+  chainId:     process.env.JOB_CHAIN_ID    ?? '',   // empty → query server active RPC
+  asset:       process.env.JOB_ASSET       ?? '',
   deliverable:
     process.env.JOB_DELIVERABLE ??
     'Send the buyer a message confirming job acceptance and your readiness to deliver.',
 }
 
-async function resolveUserIdByAddress(baseUrl, address) {
-  const res = await fetch(
-    `${baseUrl}/v1/account-public/by-wallet/${encodeURIComponent(address)}`,
-  )
-  if (!res.ok) throw new Error(`by-wallet lookup failed: ${res.status}`)
-  const body = await res.json()
-  const userId = body?.data?._id ?? body?._id
+async function resolveUserIdByAddress(sdk, address) {
+  const result = sdkOk(await sdk.user.getUserByWalletAddress(address), 'user.getUserByWalletAddress')
+  const userId = result?._id
   if (!userId) throw new Error(`No user found for address ${address}`)
   return String(userId)
 }
 
 export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
   note(`Resolving user ID for invitee address: ${inviteeAddress}`)
-  const inviteeUserId = await resolveUserIdByAddress(config.url, inviteeAddress)
+  const inviteeUserId = await resolveUserIdByAddress(sdk, inviteeAddress)
   note(`Invitee user ID: ${inviteeUserId}`)
 
   const createDto = {
@@ -40,12 +41,10 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
     description: params.description,
     amount: params.amount,
     chainId: params.chainId,
+    ...(params.currency ? { currency: params.currency } : {}),
     ...(params.asset ? { asset: params.asset } : {}),
     deliverables: params.deliverables.map(d => ({ name: d })),
   }
-
-  if (!params.asset)
-    note('Warning: --asset not provided — job will use native coin (AVAX on Fuji). Pass --asset <token-address> or set JOB_ASSET to use an ERC-20.')
 
   // Step 1: create the job record.
   note(`Creating job: "${params.title}"`)
@@ -129,29 +128,167 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
   return { jobId, inviteeAddress, inviteeUserId }
 }
 
+async function resumeJob(sdk, config, jobId, inviteeAddress) {
+  note('WARNING: Multi-step on-chain flow (~60s). Do not interrupt or wrap in a timeout.')
+
+  const jobData = sdkOk(await sdk.job.getById(jobId), 'job.getById')
+  const job = jobData?.job ?? jobData
+
+  if (['cancelled', 'completed'].includes(job.status))
+    fail(`Job ${jobId} is "${job.status}" — nothing to resume.`, 1)
+
+  note(`Resuming job "${job.title}" (status: ${job.status})`)
+
+  const escrowData = sdkOk(await sdk.job.getEscrowStatus(jobId), 'job.getEscrowStatus')
+  const onChain = escrowData?.onChain ?? {}
+
+  if (!onChain.deposited) {
+    note('Escrow not funded — resuming from deposit step')
+    const depositData = sdkOk(await sdk.job.makeDeposit(jobId), 'makeDeposit')
+    note(`Escrow address: ${depositData?.escrowAddress} — amount: ${depositData?.coinAmount} ${depositData?.coinSymbol}`)
+
+    if (depositData?.approve) {
+      note('Signing ERC-20 approve tx...')
+      const approveTx = { ...depositData.approve, chainId: depositData.approve.chainId ?? depositData.chainId }
+      const approveTxHash = await signAndBroadcast(config.key, approveTx)
+      note(`Approve tx confirmed — txHash: ${approveTxHash}`)
+    }
+
+    if (depositData?.deposit) {
+      note('Signing deposit tx...')
+      const depositTx = { ...depositData.deposit, chainId: depositData.deposit.chainId ?? depositData.chainId }
+      const depositTxHash = await signAndBroadcast(config.key, depositTx)
+      note(`Deposit tx confirmed — txHash: ${depositTxHash}`)
+    }
+
+    let validated = false
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      try {
+        sdkOk(await sdk.job.validatePayment(jobId), 'validatePayment')
+        validated = true
+        note(`Escrow funded and validated (attempt ${attempt})`)
+        break
+      } catch (err) {
+        note(`validatePayment attempt ${attempt}/6 failed: ${err.message}`)
+        if (attempt < 6) await sleep(10_000)
+      }
+    }
+    if (!validated)
+      throw new Error('Escrow deposit could not be confirmed after 6 attempts — aborting invite')
+  } else {
+    note('Escrow already funded — skipping deposit step')
+  }
+
+  // If invite was already accepted, nothing left to do.
+  if (['ongoing', 'review', 'completed'].includes(job.status)) {
+    note(`Job already has status "${job.status}" — invite step already complete.`)
+    return { jobId, resumed: true }
+  }
+
+  if (!inviteeAddress)
+    fail('Escrow is funded but no invite sent. Provide --invite <address> to complete resume.', 2)
+
+  const inviteeUserId = await resolveUserIdByAddress(sdk, inviteeAddress)
+  note(`Inviting ${inviteeAddress} (userId: ${inviteeUserId}) to job ${jobId}...`)
+  const inviteData = sdkOk(
+    await sdk.job.inviteTalent(jobId, { inviteeId: inviteeUserId }),
+    'inviteTalent',
+  )
+
+  if (inviteData?.invitePayload) {
+    const tx = inviteData.invitePayload
+    note(`Signing onInvite tx for chain ${tx.chainId}...`)
+    const txHash = await signAndBroadcast(config.key, tx)
+    sdkOk(
+      await sdk.job.confirmTx(jobId, { step: 'onInvite', txHash, inviteeId: inviteeUserId }),
+      'confirmTx onInvite',
+    )
+    note(`confirmTx onInvite — txHash: ${txHash}`)
+  }
+
+  note(`Invite sent to ${inviteeAddress} for job ${jobId}`)
+  return { jobId, resumed: true }
+}
+
 export async function run(argv) {
   const { values } = parseCommand(argv, {
-    title: { type: 'string' },
-    description: { type: 'string' },
-    amount: { type: 'string' },
-    'chain-id': { type: 'string' },
-    asset: { type: 'string' },
-    deliverable: { type: 'string', multiple: true },
-    invite: { type: 'string' },
+    title:        { type: 'string' },
+    description:  { type: 'string' },
+    amount:       { type: 'string' },
+    coin:         { type: 'string' },
+    currency:     { type: 'string' },
+    'chain-id':   { type: 'string' },
+    asset:        { type: 'string' },
+    deliverable:  { type: 'string', multiple: true },
+    invite:       { type: 'string' },
+    resume:       { type: 'string' },
   })
   const inviteeAddress = values.invite ?? process.env.INVITE_AGENT_ADDRESS
+
+  // --resume: skip creation, pick up from the right checkpoint
+  if (values.resume) {
+    const config = resolveConfig(values)
+    const { sdk } = await cliInit(config)
+    const result = await resumeJob(sdk, config, values.resume, inviteeAddress)
+    if (config.json) out({ ok: true, ...result })
+    else print(`Job ${result.jobId} resumed successfully`)
+    return
+  }
+
   if (!inviteeAddress)
     fail('--invite <address> is required (or set INVITE_AGENT_ADDRESS)', 2)
   if (!values.title) fail('--title is required', 2)
 
   const config = resolveConfig(values)
   const { sdk } = await cliInit(config)
+
+  // --- resolve coin → asset + currency + chainId ---
+  let asset    = values.asset    ?? DEFAULTS.asset
+  let currency = values.currency ?? DEFAULTS.currency
+  let chainId  = values['chain-id'] || null
+
+  const coinSymbol = values.coin ?? DEFAULTS.coin
+  if (coinSymbol) {
+    const allCoins = sdkOk(await sdk.payment.fetchPaymentCoins(), 'payment.fetchPaymentCoins')
+    const coin = (Array.isArray(allCoins) ? allCoins : []).find(
+      c => c.active && c.symbol.toLowerCase() === coinSymbol.toLowerCase(),
+    )
+    if (!coin)
+      fail(
+        `Coin "${coinSymbol}" not found or inactive.\n` +
+        'Run "psilocli list coins" to see available options.',
+        2,
+      )
+    asset    = coin.isToken ? (coin.contractAddress ?? '') : ''
+    currency = coin._id
+    if (!chainId) {
+      chainId = String(coin.rpcChainId)
+    } else if (parseInt(chainId, 10) !== coin.rpcChainId) {
+      note(`WARNING: --chain-id ${chainId} conflicts with ${coin.symbol} chain (${coin.rpcChainId}). Using coin's chain.`)
+      chainId = String(coin.rpcChainId)
+    }
+    note(`Coin: ${coin.name} (${coin.symbol})${coin.isToken ? ` — contract ${asset}` : ' — native'}`)
+  }
+
+  if (!chainId) {
+    if (DEFAULTS.chainId) {
+      chainId = DEFAULTS.chainId
+    } else {
+      const rpc = sdkOk(await sdk.payment.fetchActiveRpc(), 'payment.fetchActiveRpc')
+      chainId = rpc?.rpcChainId ? String(rpc.rpcChainId) : '43113'
+      note(`Active chain: ${rpc?.rpcName ?? chainId} (chainId ${chainId})`)
+    }
+  }
+  // -------------------------------------------------
+
+  note('WARNING: Multi-step on-chain flow (~60s). Do not interrupt or wrap in a timeout.')
   const result = await createJobAndInvite(sdk, config, inviteeAddress, {
-    title: values.title,
+    title:       values.title,
     description: values.description ?? DEFAULTS.description,
-    amount: values.amount ?? DEFAULTS.amount,
-    chainId: values['chain-id'] ?? DEFAULTS.chainId,
-    asset: values.asset ?? DEFAULTS.asset,
+    amount:      values.amount      ?? DEFAULTS.amount,
+    currency,
+    chainId,
+    asset,
     deliverables: values.deliverable ?? [DEFAULTS.deliverable],
   })
   if (config.json) out({ ok: true, ...result })

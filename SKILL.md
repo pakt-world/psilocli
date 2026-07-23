@@ -21,9 +21,6 @@ state.
 ## SDK — @pakt/psilo
 
 **Always use the Psilo SDK. Never call Paktsuite endpoints directly.**
-Known exception: `resolveUserIdByAddress()` in `src/commands/create-job.js`
-uses `GET /v1/account-public/by-wallet/<address>` because the SDK has no
-method for it yet — move it into the SDK when one exists.
 
 Auth flow (`src/client.js` → `cliInit()`):
 
@@ -40,28 +37,156 @@ Every SDK call returns a `ResponseDto` envelope. Unwrap it with
 `sdkOk(result, label)` (`src/client.js`) — it throws
 `"<label> failed: <message>"` when `status === 'error'` or `data` is missing.
 
+`sdk.job.getById(id)` returns `ResponseDto<JobResponse>` — the job is in
+`data` directly. Older SDK versions wrapped it as `{ job: JobResponse }`;
+command files use `sdkOk(result)?.job ?? sdkOk(result)` for backward
+compatibility (the `?.job` branch is a no-op against the current SDK but
+harmless to keep).
+
+## Payment discovery (`sdk.payment`)
+
+Before creating a job, query the server for the active chain and available coins:
+
+```sh
+psilocli list chains          # shows active RPC (name, chainId, native currency)
+psilocli list coins           # shows all active payment coins
+psilocli list coins --chain-id 43113   # filter by chain
+```
+
+Internally these call:
+
+```
+sdk.payment.fetchActiveRpc()      GET /v1/payment/rpc    (public — no auth required)
+sdk.payment.fetchPaymentCoins()   GET /v1/payment/coins  (public — no auth required)
+```
+
+`fetchPaymentCoins()` returns `PaymentCoin[]`. Each record has:
+
+| Field             | Meaning                                              |
+| ----------------- | ---------------------------------------------------- |
+| `_id`             | The ID the server expects in `CreateJobDto.currency` |
+| `symbol`          | Human-readable ticker (e.g. `USDC`, `AVAX`)          |
+| `contractAddress` | ERC-20 address; absent on native coins               |
+| `isToken`         | `true` = ERC-20, `false` = native coin               |
+| `rpcChainId`      | Chain this coin lives on                             |
+| `active`          | Only active coins are usable                         |
+
+### `--coin <symbol>` resolution in `create-job`
+
+`--coin` (or `JOB_COIN` env var) is the preferred way to specify payment. It
+auto-resolves three fields so you don't have to look them up manually:
+
+1. Fetches all active coins, finds one whose `symbol` matches (case-insensitive).
+2. Sets `asset = coin.contractAddress` for ERC-20 tokens, `''` for native coins.
+3. Sets `currency = coin._id` — **the server stores the coin record's `_id`, not the symbol**.
+4. Sets `chainId = String(coin.rpcChainId)` unless `--chain-id` overrides it.
+
+If neither `--coin` nor `--chain-id` nor `JOB_CHAIN_ID` is set, `create-job`
+calls `fetchActiveRpc()` to read the server's currently active chain.
+
 ## Job lifecycle and SDK calls
 
 ```
 Buyer                                Seller
-─────────────────────────────────────────────────────
+─────────────────────────────────────────────────────────────────────
+Pre-flight (optional):
+  list chains  → sdk.payment.fetchActiveRpc()
+  list coins   → sdk.payment.fetchPaymentCoins()
+
 create-job:
-  job.create → job.makeDeposit
-  sign approve? + deposit txs
-  job.validatePayment (6×10s retry)
-  job.inviteTalent (+ sign onInvite → job.confirmTx)
-                         list invites (job.listAllInvites)
+  sdk.payment.fetchPaymentCoins()  (when --coin is used)
+  sdk.payment.fetchActiveRpc()     (when chain-id not otherwise known)
+  user.getUserByWalletAddress()    (resolve invitee address → userId)
+  job.create(dto)
+  job.makeDeposit(jobId)
+  sign ERC-20 approve tx           (ERC-20 tokens only)
+  sign deposit tx
+  job.validatePayment(jobId)       (retries 6×10s)
+  job.inviteTalent(jobId)
+  sign onInvite tx → job.confirmTx(jobId, { step:'onInvite' })
+
+create-job --resume <jobId>:        (crash recovery)
+  job.getById(jobId)               check status ≠ cancelled/completed
+  job.getEscrowStatus(jobId)       → onChain.deposited?
+    false → resume from makeDeposit + sign + validatePayment
+    true  → skip deposit
+  if status not ongoing/review/completed → inviteTalent (needs --invite)
+
+cancel-job:
+  job.getCancelRequest(jobId)      pre-flight: reject if already pending
+  job.requestCancel(jobId, dto)
+
+                         accept-cancel / decline-cancel:
+                           job.acceptCancel(jobId, dto?)
+                           job.declineCancel(jobId, dto?)
+
+                         list invites → job.listAllInvites()
                          accept-invite:
-                           job.acceptInvite
+                           job.acceptInvite(jobId, inviteId)
                            sign acceptPayload → confirmTx onAccept
                          complete-job:
                            job.getById → toggleDeliverableProgress each
-                           job.completeJob
+                           job.completeJob(jobId)
                            sign markReadyPayload → confirmTx onMarkReady (6×10s)
 release-payment:
-  job.releasePayment
+  job.releasePayment(jobId)
   sign releasePayload → confirmTx onRelease
-review: job.submitReview
+review: job.submitReview(jobId, dto)
+reviews: job.getReceivedReviews(userId, { limit?, page? })
+```
+
+### Cancel flow
+
+Either the buyer **or** the seller can request a cancellation. The server enforces two rules:
+
+1. Only a job participant (buyer = `creator`, seller = `owner`) can touch cancel requests.
+2. You cannot resolve your own request — the other party must accept or decline.
+
+```
+Buyer or seller:
+  psilocli cancel-job <jobId> --reason "..." [--explanation "..."]
+    → creates a pending CancelRequest
+    → CLI pre-flight: if a request is already pending, exits with its ID instead of duplicating
+
+The OTHER party:
+  psilocli accept-cancel <jobId> [--resolution "..."]
+    → job.status → "cancelled"
+
+  -- OR --
+
+  psilocli decline-cancel <jobId> [--resolution "..."]
+    → CancelRequest.status → "declined", job continues unchanged
+```
+
+`cancel-job` can be run at any job status (open, ongoing, review). Escrow fund
+return after acceptance is handled server-side / on-chain and is not a separate
+CLI step. If the other party declines, the job resumes from exactly the status
+it was in before the request.
+
+### Job status vocabulary
+
+| Status      | Meaning                                           |
+| ----------- | ------------------------------------------------- |
+| `open`      | Created; escrow being set up; invite not yet accepted |
+| `ongoing`   | Seller accepted the invite; work in progress      |
+| `review`    | Seller marked ready; awaiting buyer release       |
+| `completed` | Payment released                                  |
+| `cancelled` | Cancelled via `cancel-job` / `accept-cancel`      |
+
+The stats aggregate also tracks `invited` as a legacy status; treat it as equivalent to `open` if encountered.
+
+### `CreateJobDto` payload
+
+```json
+{
+  "title":        "--title",
+  "description":  "--description or JOB_DESCRIPTION",
+  "amount":       "--amount (string, e.g. '100')",
+  "chainId":      "resolved: --chain-id > --coin.rpcChainId > JOB_CHAIN_ID > active RPC",
+  "currency":     "coin._id  (set by --coin)  OR  raw --currency value",
+  "asset":        "coin.contractAddress for ERC-20; omitted for native coins",
+  "deliverables": [{ "name": "..." }]
+}
 ```
 
 ## Chain / transaction signing
@@ -82,14 +207,11 @@ review: job.submitReview
 `src/messaging.js` → `withMessaging(config, jwt, fn)` opens a socket,
 runs `fn`, disconnects in `finally`.
 
-Chat request/response goes through `wsRequest(messaging, event, payload)`,
-which uses socket.io acknowledgements (`emitWithAck`, 10s timeout) and
-unwraps the `{ error, statusCode, message, data }` envelope. This is a
-deliberate workaround: paktsuite replies to chat events via acks, but the
-SDK's request/response methods (`loadConversations`,
-`createDirectConversation`, `fetchConversation`, ...) emit without an ack
-and wait for a same-named event the server never sends — they always time
-out. When the SDK adopts acks, switch back and delete `wsRequest`.
+Chat commands call SDK methods directly — `messaging.loadConversations()`,
+`messaging.createDirectConversation()`, `messaging.fetchConversation()`, etc.
+— which use `socket.io emitWithAck` internally (10s timeout) and unwrap the
+`{ error, statusCode, message, data }` envelope. The old `wsRequest()`
+workaround has been retired from all command files.
 
 `messages watch` is the only command that stays connected: it prints
 `onBroadcast` events until SIGINT. Keep it that way — no reconnect loops,
@@ -132,11 +254,29 @@ uploaded `FileRecord` — upload first, then pass the returned ID.
 ## User service (`sdk.user`)
 
 ```
-user update [--first-name <s>] [--last-name <s>] [--username <s>]
-            [--profile-image <upload-id>] [--bg-image <upload-id>] [--private]
+user get <id>                                        Fetch another user's public profile
+user update [--first-name <s>] [--last-name <s>]     Update own profile
+            [--username <s>] [--profile-image <id>]
+            [--bg-image <id>] [--private]
+whoami                                               Own full profile (name, email, score, role…)
+list users [--search <s>] [--tags <t>] [--limit <n>] Search user directory (includes score column)
 ```
 
-Only explicitly-supplied flags are included in the PATCH payload — absent
+SDK methods used:
+
+| Command      | SDK call                                    | Endpoint                              |
+| ------------ | ------------------------------------------- | ------------------------------------- |
+| `whoami`     | `sdk.user.getProfile()`                     | `GET /v1/account`                     |
+| `user get`   | `sdk.user.getUserById(id)`                  | `GET /v1/account/user/:id`            |
+| `list users` | `sdk.user.searchUsers(query)`               | `GET /v1/account/user`                |
+| `user update`| `sdk.user.update(dto)`                      | `PATCH /v1/account/update`            |
+| `create-job` | `sdk.user.getUserByWalletAddress(address)`  | `GET /v1/account-public/by-wallet/:a` |
+
+`user get` shows: name, username, wallet address, user ID, role, **score**, verified flag, and tags.
+`whoami` shows the same fields plus email and status for the authenticated agent.
+`list users` table columns: ID, Name, Username, **Score**, Tags.
+
+Only explicitly-supplied flags are included in the `user update` PATCH payload — absent
 flags are never sent so the API treats them as no-ops.
 
 ## Configuration
@@ -149,9 +289,18 @@ flags are never sent so the API treats them as no-ops.
 | `-u, --url`     | `PAKTSUITE_URL`     | `https://devapi-psilo.kapt.xyz` |
 | `--json`        | —                   | off                             |
 
-`create-job` requires `--title` and honors `INVITE_AGENT_ADDRESS`,
-`JOB_DESCRIPTION`, `JOB_AMOUNT`, `JOB_CHAIN_ID`, `JOB_ASSET`,
-`JOB_DELIVERABLE` as flag fallbacks.
+`create-job` requires `--title` and honors these env var fallbacks:
+
+| Env var                | Flag              | Notes                                               |
+| ---------------------- | ----------------- | --------------------------------------------------- |
+| `INVITE_AGENT_ADDRESS` | `--invite`        | Invitee wallet address                              |
+| `JOB_DESCRIPTION`      | `--description`   | Has a built-in default                              |
+| `JOB_AMOUNT`           | `--amount`        | Default `'1'`                                       |
+| `JOB_COIN`             | `--coin`          | Symbol e.g. `USDC` — resolves asset + currency automatically |
+| `JOB_CURRENCY`         | `--currency`      | Raw coin `_id` override; prefer `JOB_COIN`          |
+| `JOB_CHAIN_ID`         | `--chain-id`      | Explicit chain; if unset, fetched from active RPC   |
+| `JOB_ASSET`            | `--asset`         | Raw ERC-20 address override; prefer `JOB_COIN`      |
+| `JOB_DELIVERABLE`      | `--deliverable`   | Has a built-in default                              |
 
 ## Output discipline
 
@@ -182,6 +331,24 @@ fail, check the deposit tx hash on the explorer and re-run
 
 `release-payment` only works after the seller's `complete-job` confirmed
 `onMarkReady`. Check `psilocli list jobs --role buyer --status ongoing`.
+
+### `psilocli reviews <userId>` returns "No reviews yet" / count: 0
+
+Reviews submitted via `psilocli review` (the `POST /v1/job/:jobId/review`
+path) were invisible to `GET /v1/reviews-public` because `fetchRatings` in
+paktsuite-v2 queried the `receiver` field by ObjectId only, silently missing
+documents where the field was stored as a plain string (written before the
+schema enforced ObjectId types). Fixed in
+`paktsuite-v2/src/api/v1/rating/rating.service.ts` — `fetchRatings` now
+queries `receiver`, `owner`, and `data` with `{ $in: [stringForm, ObjectId] }`,
+matching what `listReviewsFor` already did for `data`.
+
+To normalise existing string-typed rows on the database:
+
+```sh
+node scripts/migrate-rating-objectid-fields.mjs --dry-run   # preview
+node scripts/migrate-rating-objectid-fields.mjs --apply     # write
+```
 
 ### `INITIALIZE_CONVERSATION timed out after 10s`
 

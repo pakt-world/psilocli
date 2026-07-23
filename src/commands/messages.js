@@ -1,11 +1,11 @@
 import { parseCommand, resolveConfig } from '../config.js'
-import { cliInit } from '../client.js'
-import { withMessaging, wsRequest } from '../messaging.js'
+import { cliInit, sdkOk } from '../client.js'
+import { withMessaging } from '../messaging.js'
 import { out, print, note, fail, cliTable } from '../output.js'
 
 export const usage = `psilocli messages list
 psilocli messages history <conversationId> [--limit <n>]
-psilocli messages send (--to <userId> | --conversation <id>) <text>
+psilocli messages send (--to <userId> | --conversation <id>) [--attachment <fileId>...] [<text>]
 psilocli messages create-group <name> <userId...>
 psilocli messages seen <conversationId>
 psilocli messages watch [--conversation <id>]`
@@ -21,8 +21,7 @@ async function listConversations(argv) {
   const config = resolveConfig(values)
   const { jwt } = await cliInit(config)
   const conversations = await withMessaging(config, jwt, async (messaging) => {
-    const data = await wsRequest(messaging, 'GET_ALL_CONVERSATIONS', {})
-    return data?.messages ?? []
+    return await messaging.loadConversations()
   })
   if (config.json) {
     out(conversations)
@@ -59,10 +58,7 @@ async function history(argv) {
   const config = resolveConfig(values)
   const { jwt } = await cliInit(config)
   const conversation = await withMessaging(config, jwt, async (messaging) => {
-    const data = await wsRequest(messaging, 'FETCH_CONVERSATION_MESSAGES', {
-      conversationId,
-    })
-    return data?.conversation ?? data
+    return await messaging.fetchConversation(conversationId)
   })
   const all = conversation?.chats?.messages ?? []
   const messages = all.slice(-limit)
@@ -83,35 +79,52 @@ async function send(argv) {
   const { values, positionals } = parseCommand(
     argv,
     {
-      to: { type: 'string' },
+      to:         { type: 'string' },
       conversation: { type: 'string' },
+      attachment: { type: 'string', multiple: true },
     },
     { positionals: true },
   )
-  const text = positionals.join(' ')
+  const text        = positionals.join(' ')
+  const attachments = values.attachment ?? []
+
   if ((!values.to && !values.conversation) || (values.to && values.conversation))
     fail(
-      'Usage: psilocli messages send (--to <userId> | --conversation <id>) <text>',
+      'Usage: psilocli messages send (--to <userId> | --conversation <id>) [--attachment <fileId>...] [<text>]',
       2,
     )
-  if (!text) fail('Message text is required', 2)
+  if (!text && attachments.length === 0)
+    fail('Message text or at least one --attachment is required', 2)
+
+  const hasText        = Boolean(text)
+  const hasAttachments = attachments.length > 0
+  const msgType = hasText && hasAttachments ? 'TEXT_MEDIA'
+                : hasAttachments            ? 'MEDIA'
+                :                            'TEXT'
 
   const config = resolveConfig(values)
-  const { jwt } = await cliInit(config)
+  const { sdk, jwt } = await cliInit(config)
+
+  // Pre-flight: verify every attachment ID exists before opening the socket
+  for (const attachmentId of attachments) {
+    sdkOk(
+      await sdk.upload.getUpload(attachmentId),
+      `upload.getUpload(${attachmentId})`,
+    )
+  }
+
   const conversationId = await withMessaging(config, jwt, async (messaging) => {
     let convId = values.conversation
     if (!convId) {
-      const data = await wsRequest(messaging, 'INITIALIZE_CONVERSATION', {
-        type: 'DIRECT',
-        recipientId: values.to,
-      })
-      convId = (data?.conversation ?? data)?._id
+      const conv = await messaging.createDirectConversation(values.to)
+      convId = conv._id
       if (!convId) throw new Error('Could not open a conversation')
     }
-    await wsRequest(messaging, 'SEND_MESSAGE', {
+    messaging.sendMessage({
       conversationId: convId,
-      type: 'TEXT',
-      message: text,
+      type: msgType,
+      ...(hasText        ? { message: text }   : {}),
+      ...(hasAttachments ? { attachments }      : {}),
     })
     return convId
   })
@@ -128,12 +141,7 @@ async function createGroup(argv) {
   const config = resolveConfig(values)
   const { jwt } = await cliInit(config)
   const conversation = await withMessaging(config, jwt, async (messaging) => {
-    const data = await wsRequest(messaging, 'INITIALIZE_CONVERSATION', {
-      type: 'GROUP',
-      recipients: userIds.map((id) => ({ user: id, role: 'USER' })),
-      name,
-    })
-    return data?.conversation ?? data
+    return await messaging.createGroupConversation(userIds, name)
   })
   if (config.json) out({ ok: true, conversationId: conversation._id })
   else print(`Group "${name}" created (conversation: ${conversation._id})`)
@@ -147,12 +155,9 @@ async function seen(argv) {
 
   const config = resolveConfig(values)
   const { jwt } = await cliInit(config)
-  await withMessaging(config, jwt, (messaging) =>
-    wsRequest(messaging, 'MARK_MESSAGE_AS_SEEN', {
-      conversationId,
-      seen: Date.now().toString(),
-    }),
-  )
+  await withMessaging(config, jwt, (messaging) => {
+    messaging.markSeen(conversationId)
+  })
   if (config.json) out({ ok: true, conversationId })
   else print(`Conversation ${conversationId} marked seen`)
 }

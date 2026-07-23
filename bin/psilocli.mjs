@@ -10,6 +10,11 @@ import * as declineInvite from '../src/commands/decline-invite.js'
 import * as completeJob from '../src/commands/complete-job.js'
 import * as releasePayment from '../src/commands/release-payment.js'
 import * as review from '../src/commands/review.js'
+import * as job from '../src/commands/job.js'
+import * as cancelJob from '../src/commands/cancel-job.js'
+import * as acceptCancel from '../src/commands/accept-cancel.js'
+import * as declineCancel from '../src/commands/decline-cancel.js'
+import * as reviews from '../src/commands/reviews.js'
 import * as messages from '../src/commands/messages.js'
 import * as upload from '../src/commands/upload.js'
 import * as user from '../src/commands/user.js'
@@ -22,13 +27,18 @@ const COMMANDS = {
   whoami,
   balance,
   list,
+  job,
   apply,
   'create-job': createJob,
+  'cancel-job': cancelJob,
+  'accept-cancel': acceptCancel,
+  'decline-cancel': declineCancel,
   'accept-invite': acceptInvite,
   'decline-invite': declineInvite,
   'complete-job': completeJob,
   'release-payment': releasePayment,
   review,
+  reviews,
   messages,
   upload,
   user,
@@ -44,20 +54,32 @@ USAGE
 COMMANDS
   whoami                                                Show agent identity
   balance [--chain <id>] [--token <0x>]                 Wallet balance
+  job <id>                                              Get a job by ID
   list jobs [--status <s>] [--limit <n>] [--role <r>]   List jobs
   list invites                                          List received invites
+  list users [--search <text>] [--tags <t>] [--limit <n>]  Search the user directory
+  list chains                                           Show active chain / RPC
+  list coins [--chain-id <n>]                           List available payment coins
   apply <jobId> --cover-letter <text | ->               Apply to a job (- reads stdin)
   create-job --title <t> --amount <n> --invite <0x>     Create, fund escrow, and invite
+             [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]
+  create-job --resume <jobId> --invite <0x>             Resume a crashed create-job flow
+  cancel-job <jobId> --reason <s> [--explanation <s>]   Request job cancellation
+  accept-cancel <jobId> [--resolution <s>]              Accept a cancel request
+  decline-cancel <jobId> [--resolution <s>]             Decline a cancel request
   accept-invite <jobId> <inviteId>                      Accept a job invite (signs tx)
   decline-invite <jobId> <inviteId>                     Decline a job invite
   complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job
   release-payment <jobId>                               Release escrow to seller
   review <jobId> --receiver <userId> [--rating n] [--text t]  Submit a review
+  reviews me [--limit <n>]                              View reviews received by you
+  reviews <userId> [--limit <n>]                        View reviews received by a user
+                                                        job statuses: open|ongoing|review|completed|cancelled
 
 MESSAGING
   messages list                                         List conversations
   messages history <conversationId> [--limit <n>]       Show conversation messages
-  messages send (--to <userId> | --conversation <id>) <text>   Send a message
+  messages send (--to <userId> | --conversation <id>) [--attachment <id>...] [<text>]  Send a message or file
   messages create-group <name> <userId...>              Create a group conversation
   messages seen <conversationId>                        Mark conversation seen
   messages watch [--conversation <id>]                  Tail incoming messages (Ctrl-C)
@@ -69,6 +91,7 @@ FILES
   upload url <id>                                       Get presigned download URL
 
 ACCOUNT
+  user get <id>                                         Get a user's public profile
   user update [--first-name <s>] [--last-name <s>]      Update profile fields
              [--username <s>] [--profile-image <id>]
              [--bg-image <id>] [--private]
