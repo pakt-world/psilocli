@@ -37,6 +37,12 @@ Every SDK call returns a `ResponseDto` envelope. Unwrap it with
 `sdkOk(result, label)` (`src/client.js`) — it throws
 `"<label> failed: <message>"` when `status === 'error'` or `data` is missing.
 
+`sdk.job.getById(id)` returns `ResponseDto<JobResponse>` — the job is in
+`data` directly. Older SDK versions wrapped it as `{ job: JobResponse }`;
+command files use `sdkOk(result)?.job ?? sdkOk(result)` for backward
+compatibility (the `?.job` branch is a no-op against the current SDK but
+harmless to keep).
+
 ## Payment discovery (`sdk.payment`)
 
 Before creating a job, query the server for the active chain and available coins:
@@ -128,6 +134,34 @@ release-payment:
 review: job.submitReview(jobId, dto)
 reviews: job.getReceivedReviews(userId, { limit?, page? })
 ```
+
+### Cancel flow
+
+Either the buyer **or** the seller can request a cancellation. The server enforces two rules:
+
+1. Only a job participant (buyer = `creator`, seller = `owner`) can touch cancel requests.
+2. You cannot resolve your own request — the other party must accept or decline.
+
+```
+Buyer or seller:
+  psilocli cancel-job <jobId> --reason "..." [--explanation "..."]
+    → creates a pending CancelRequest
+    → CLI pre-flight: if a request is already pending, exits with its ID instead of duplicating
+
+The OTHER party:
+  psilocli accept-cancel <jobId> [--resolution "..."]
+    → job.status → "cancelled"
+
+  -- OR --
+
+  psilocli decline-cancel <jobId> [--resolution "..."]
+    → CancelRequest.status → "declined", job continues unchanged
+```
+
+`cancel-job` can be run at any job status (open, ongoing, review). Escrow fund
+return after acceptance is handled server-side / on-chain and is not a separate
+CLI step. If the other party declines, the job resumes from exactly the status
+it was in before the request.
 
 ### Job status vocabulary
 
@@ -297,6 +331,24 @@ fail, check the deposit tx hash on the explorer and re-run
 
 `release-payment` only works after the seller's `complete-job` confirmed
 `onMarkReady`. Check `psilocli list jobs --role buyer --status ongoing`.
+
+### `psilocli reviews <userId>` returns "No reviews yet" / count: 0
+
+Reviews submitted via `psilocli review` (the `POST /v1/job/:jobId/review`
+path) were invisible to `GET /v1/reviews-public` because `fetchRatings` in
+paktsuite-v2 queried the `receiver` field by ObjectId only, silently missing
+documents where the field was stored as a plain string (written before the
+schema enforced ObjectId types). Fixed in
+`paktsuite-v2/src/api/v1/rating/rating.service.ts` — `fetchRatings` now
+queries `receiver`, `owner`, and `data` with `{ $in: [stringForm, ObjectId] }`,
+matching what `listReviewsFor` already did for `data`.
+
+To normalise existing string-typed rows on the database:
+
+```sh
+node scripts/migrate-rating-objectid-fields.mjs --dry-run   # preview
+node scripts/migrate-rating-objectid-fields.mjs --apply     # write
+```
 
 ### `INITIALIZE_CONVERSATION timed out after 10s`
 

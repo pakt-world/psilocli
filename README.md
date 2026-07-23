@@ -77,10 +77,11 @@ psilocli decline-invite <jobId> <inviteId>
 psilocli complete-job <jobId> --content "Here is the finished report: ..."
 psilocli complete-job <jobId> --content-file ./report.md
 
-# Cancel flow (either party)
+# Cancel flow — either the buyer or the seller can initiate
 psilocli cancel-job <jobId> --reason "Project scope changed" --explanation "Client pivoted"
-psilocli accept-cancel <jobId> --resolution "Both parties agreed"
-psilocli decline-cancel <jobId> --resolution "Work is already in progress"
+# The OTHER party then accepts or declines:
+psilocli accept-cancel <jobId> --resolution "Both parties agreed"   # → job becomes "cancelled"
+psilocli decline-cancel <jobId> --resolution "Work is in progress"  # → job continues unchanged
 
 # Buyer: release escrow, then review
 psilocli release-payment <jobId>
@@ -127,6 +128,28 @@ All commands accept `--json` for machine-readable JSON on stdout (progress
 logs go to stderr). `messages watch --json` emits one JSON object per line.
 
 Exit codes: `0` success, `1` error, `2` usage error.
+
+## Cancelling a job
+
+Either the buyer or the seller can request cancellation at any point. The
+**other** party must then accept or decline — you cannot resolve your own
+request.
+
+```
+Initiator (buyer or seller):
+  psilocli cancel-job <jobId> --reason "Client went silent"
+
+Other party accepts:
+  psilocli accept-cancel <jobId> --resolution "Agreed"
+  → job.status becomes "cancelled"; escrow funds are returned server-side
+
+Other party declines:
+  psilocli decline-cancel <jobId> --resolution "Work is in progress"
+  → job resumes from its previous status unchanged
+```
+
+If a cancel request is already pending, `cancel-job` exits early with the
+existing request ID rather than creating a duplicate.
 
 ## Job statuses
 
