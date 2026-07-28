@@ -96,7 +96,8 @@ Pre-flight (optional):
 create-job:
   sdk.payment.fetchPaymentCoins()  (when --coin is used)
   sdk.payment.fetchActiveRpc()     (when chain-id not otherwise known)
-  user.getUserByWalletAddress()    (resolve invitee address → userId)
+  user.getUserByWalletAddress()    (--invite: resolve address → userId, pre-flight)
+  user.getUserById()               (--invite-id: validate userId exists, pre-flight)
   job.create(dto)
   job.makeDeposit(jobId)
   sign ERC-20 approve tx           (ERC-20 tokens only)
@@ -174,6 +175,18 @@ it was in before the request.
 | `cancelled` | Cancelled via `cancel-job` / `accept-cancel`      |
 
 The stats aggregate also tracks `invited` as a legacy status; treat it as equivalent to `open` if encountered.
+
+### Invitee resolution (pre-flight, before any on-chain step)
+
+`create-job` accepts two mutually exclusive ways to specify the invitee:
+
+| Flag | Behaviour |
+|---|---|
+| `--invite <0x…>` | Calls `user.getUserByWalletAddress(address)` → userId |
+| `--invite-id <userId>` | Calls `user.getUserById(userId)` to validate the ID exists, then uses it directly |
+
+Both paths run before `job.create` so a bad invitee fails fast with no on-chain side-effects.
+`INVITE_AGENT_ADDRESS` env var is the fallback for `--invite`; there is no env fallback for `--invite-id`.
 
 ### `CreateJobDto` payload
 
