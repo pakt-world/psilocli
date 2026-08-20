@@ -5,10 +5,10 @@ import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
 export const usage =
-  'psilocli create-job --title <t> --amount <n> --invite <0x> [--description <t>]\n' +
+  'psilocli create-job --title <t> --amount <n> [--invite <0x> | --invite-id <userId>] [--description <t>]\n' +
   '                    [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]\n' +
   '                    [--deliverable <t> ...]\n' +
-  'psilocli create-job --resume <jobId> --invite <0x>  Resume a crashed create-job flow'
+  'psilocli create-job --resume <jobId> [--invite <0x> | --invite-id <userId>]  Resume a crashed create-job flow'
 
 const DEFAULTS = {
   description:
@@ -31,10 +31,18 @@ async function resolveUserIdByAddress(sdk, address) {
   return String(userId)
 }
 
-export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
-  note(`Resolving user ID for invitee address: ${inviteeAddress}`)
-  const inviteeUserId = await resolveUserIdByAddress(sdk, inviteeAddress)
-  note(`Invitee user ID: ${inviteeUserId}`)
+export async function createJobAndInvite(sdk, config, inviteeAddress, params, inviteeUserIdOverride = null) {
+  let inviteeUserId
+  if (inviteeUserIdOverride) {
+    // Validate the user ID exists before touching the chain.
+    sdkOk(await sdk.user.getUserById(inviteeUserIdOverride), 'user.getUserById')
+    note(`Invitee user ID verified: ${inviteeUserIdOverride}`)
+    inviteeUserId = inviteeUserIdOverride
+  } else {
+    note(`Resolving user ID for invitee address: ${inviteeAddress}`)
+    inviteeUserId = await resolveUserIdByAddress(sdk, inviteeAddress)
+    note(`Invitee user ID: ${inviteeUserId}`)
+  }
 
   const createDto = {
     title: params.title,
@@ -103,7 +111,8 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
   }
 
   // Step 6: send the invite; sign the invite tx if escrow-locked.
-  note(`Inviting ${inviteeAddress} (userId: ${inviteeUserId}) to job ${jobId}...`)
+  const inviteRef = inviteeAddress ?? inviteeUserId
+  note(`Inviting ${inviteRef} to job ${jobId}...`)
   const inviteData = sdkOk(
     await sdk.job.inviteTalent(jobId, { inviteeId: inviteeUserId }),
     'inviteTalent',
@@ -124,7 +133,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params) {
     note(`confirmTx onInvite — txHash: ${txHash}`)
   }
 
-  note(`Invite sent to ${inviteeAddress} for job "${params.title}" (${jobId})`)
+  note(`Invite sent to ${inviteRef} for job "${params.title}" (${jobId})`)
   return { jobId, inviteeAddress, inviteeUserId }
 }
 
@@ -221,9 +230,11 @@ export async function run(argv) {
     asset:        { type: 'string' },
     deliverable:  { type: 'string', multiple: true },
     invite:       { type: 'string' },
+    'invite-id':  { type: 'string' },
     resume:       { type: 'string' },
   })
   const inviteeAddress = values.invite ?? process.env.INVITE_AGENT_ADDRESS
+  const inviteeIdDirect = values['invite-id'] ?? null
 
   // --resume: skip creation, pick up from the right checkpoint
   if (values.resume) {
@@ -235,8 +246,8 @@ export async function run(argv) {
     return
   }
 
-  if (!inviteeAddress)
-    fail('--invite <address> is required (or set INVITE_AGENT_ADDRESS)', 2)
+  if (!inviteeAddress && !inviteeIdDirect)
+    fail('--invite <address> or --invite-id <userId> is required (or set INVITE_AGENT_ADDRESS)', 2)
   if (!values.title) fail('--title is required', 2)
 
   const config = resolveConfig(values)
@@ -290,7 +301,7 @@ export async function run(argv) {
     chainId,
     asset,
     deliverables: values.deliverable ?? [DEFAULTS.deliverable],
-  })
+  }, inviteeIdDirect)
   if (config.json) out({ ok: true, ...result })
   else print(`Job created and invite sent — jobId: ${result.jobId}`)
 }

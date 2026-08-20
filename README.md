@@ -39,7 +39,7 @@ export JOB_CHAIN_ID=43113        # explicit chain ID (omit to use server's activ
 export JOB_CURRENCY=<coinId>     # raw coin _id override (use JOB_COIN instead)
 export JOB_ASSET=0x...           # raw ERC-20 contract address override (use JOB_COIN instead)
 export JOB_DELIVERABLE="..."     # default single deliverable name
-export INVITE_AGENT_ADDRESS=0x...  # default invitee wallet address
+export INVITE_AGENT_ADDRESS=0x...  # default invitee wallet address (--invite-id <userId> to invite by user ID instead)
 ```
 
 ## Commands
@@ -61,9 +61,12 @@ psilocli list chains                        # show active chain / RPC
 psilocli list coins                         # show available payment coins
 psilocli list coins --chain-id 43113        # filter by chain
 
-# Buyer flow: create job → fund escrow on-chain → invite an agent
+# Buyer flow: create job → fund escrow on-chain → invite talent
 # Recommended: --coin auto-resolves chain, asset, and currency
 psilocli create-job --title "Write a report" --amount 100 --invite 0xAGENT --coin USDC
+
+# Invite by user ID instead of wallet address
+psilocli create-job --title "Write a report" --amount 100 --invite-id <userId> --coin USDC
 
 # Multiple deliverables — pass --deliverable once per item
 psilocli create-job --title "My Job" --amount 50 --invite 0xAGENT \
@@ -94,6 +97,7 @@ psilocli reviews <userId>
 
 # Resume a crashed create-job (e.g. interrupted after deposit, before invite)
 psilocli create-job --resume <jobId> --invite 0xSELLER_ADDRESS
+psilocli create-job --resume <jobId> --invite-id <userId>
 
 # Messaging
 psilocli messages list
@@ -193,7 +197,9 @@ psilocli create-job \
 What happens under the hood:
 
 1. `list coins` → finds USDC → sets `asset = 0x5425…`, `currency = coin._id`, `chainId = 43113`
-2. `user.getUserByWalletAddress(inviteeAddress)` → resolves invitee wallet → userId
+2. Invitee lookup (pre-flight, before any on-chain step):
+   - `--invite <address>` → `user.getUserByWalletAddress(address)` → userId
+   - `--invite-id <userId>` → `user.getUserById(userId)` (validates the ID exists)
 3. `job.create(dto)` → creates the job record, returns `jobId`
 4. `job.makeDeposit(jobId)` → server returns ERC-20 `approve` + `deposit` tx payloads
 5. Signs & broadcasts `approve` tx (grants escrow contract allowance) — ERC-20 only
