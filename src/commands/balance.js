@@ -1,6 +1,7 @@
 import { ethers } from 'ethers'
 import { parseCommand, resolveConfig } from '../config.js'
-import { RPC_URLS, NATIVE_SYMBOLS, readTokenBalance } from '../chains.js'
+import { cliInit } from '../client.js'
+import { resolveRpc, readTokenBalance } from '../chains.js'
 import { out, print, fail } from '../output.js'
 
 export const usage = 'psilocli balance [--chain <id>] [--token <0x>]'
@@ -11,20 +12,22 @@ export async function run(argv) {
     token: { type: 'string' },
   })
   const config = resolveConfig(values)
+  const { sdk } = await cliInit(config)
   const chainId = values.chain ?? '43113'
-  const rpcUrl = RPC_URLS[chainId]
+  const { url: rpcUrl, symbol: nativeSymbol } = await resolveRpc(sdk, chainId)
   if (!rpcUrl) fail(`No RPC URL configured for chain ${chainId}`)
   const provider = new ethers.JsonRpcProvider(rpcUrl)
   const raw = await provider.getBalance(config.address)
   const result = {
     native: {
       chain: chainId,
-      symbol: NATIVE_SYMBOLS[chainId] ?? 'native',
+      symbol: nativeSymbol ?? 'native',
       balance: ethers.formatEther(raw),
     },
   }
   if (values.token) {
     const { formatted, symbol } = await readTokenBalance(
+      sdk,
       values.token,
       chainId,
       config.address,

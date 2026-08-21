@@ -117,6 +117,9 @@ cancel-job:
   job.getCancelRequest(jobId)      pre-flight: reject if already pending
   job.requestCancel(jobId, dto)
 
+delete-job: job.delete(jobId)     hard delete — for unfunded/junk jobs, no
+                                   counterparty acceptance needed
+
                          accept-cancel / decline-cancel:
                            job.acceptCancel(jobId, dto?)
                            job.declineCancel(jobId, dto?)
@@ -164,6 +167,20 @@ return after acceptance is handled server-side / on-chain and is not a separate
 CLI step. If the other party declines, the job resumes from exactly the status
 it was in before the request.
 
+### Deleting junk jobs
+
+`create-job` retries after a failed deposit each create a new `open` job
+rather than reusing the old one — the failed ones are never funded and have
+no counterparty, so `cancel-job`'s accept/decline dance doesn't apply. Remove
+them directly:
+
+```
+psilocli delete-job <jobId>
+```
+
+This calls `job.delete(jobId)` — a hard delete, not a cancel request. Expect
+the server to reject it once a job has a seller/escrow attached.
+
 ### Job status vocabulary
 
 | Status      | Meaning                                           |
@@ -204,10 +221,16 @@ Both paths run before `job.create` so a bad invitee fails fast with no on-chain 
 
 ## Chain / transaction signing
 
-`src/chains.js` → `signAndBroadcast(key, txPayload)`:
+`src/chains.js` → `signAndBroadcast(sdk, key, txPayload)`:
 
-- Picks the RPC from `RPC_URLS[txPayload.chainId]` (43113 Fuji, 43114
-  Avalanche mainnet) — extend `RPC_URLS`/`NATIVE_SYMBOLS` for new chains.
+- Resolves the RPC via `resolveRpc(sdk, chainId)`: calls the server's
+  `sdk.payment.fetchActiveRpc()` (public, no auth) and uses its `rpcUrls[0]`
+  when `rpcChainId` matches. That endpoint only ever describes the one chain
+  the server currently has active, so a small `FALLBACK_RPC_URLS`/
+  `FALLBACK_NATIVE_SYMBOLS` map in `chains.js` covers chains a job might still
+  need signing for (43113 Fuji, 43114 Avalanche mainnet, 84532 Base Sepolia)
+  when the active chain doesn't match — extend that map for new chains, but
+  prefer the server's answer whenever it applies.
 - Signs with `ethers.Wallet`, sends, and **waits one confirmation**
   (`tx.wait()`), so callers never need blind sleeps after it returns.
 - API tx payloads are unsigned `{ to, data, value, gas, maxFeePerGas,

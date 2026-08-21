@@ -17,7 +17,7 @@ export async function run(argv) {
   const releasePayload = releaseData?.releasePayload
   if (!releasePayload)
     fail('No releasePayload returned — job may not be in review status')
-  const txHash = await signAndBroadcast(config.key, releasePayload)
+  const txHash = await signAndBroadcast(sdk, config.key, releasePayload)
   await sleep(8_000)
   sdkOk(
     await sdk.job.confirmTx(jobId, { step: 'onRelease', txHash }),
