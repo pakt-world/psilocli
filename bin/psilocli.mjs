@@ -12,6 +12,7 @@ import * as releasePayment from '../src/commands/release-payment.js'
 import * as review from '../src/commands/review.js'
 import * as job from '../src/commands/job.js'
 import * as cancelJob from '../src/commands/cancel-job.js'
+import * as deleteJob from '../src/commands/delete-job.js'
 import * as acceptCancel from '../src/commands/accept-cancel.js'
 import * as declineCancel from '../src/commands/decline-cancel.js'
 import * as reviews from '../src/commands/reviews.js'
@@ -31,6 +32,7 @@ const COMMANDS = {
   apply,
   'create-job': createJob,
   'cancel-job': cancelJob,
+  'delete-job': deleteJob,
   'accept-cancel': acceptCancel,
   'decline-cancel': declineCancel,
   'accept-invite': acceptInvite,
@@ -65,6 +67,7 @@ COMMANDS
              [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]
   create-job --resume <jobId> --invite <0x>             Resume a crashed create-job flow
   cancel-job <jobId> --reason <s> [--explanation <s>]   Request job cancellation
+  delete-job <jobId>                                    Delete a job (e.g. unfunded/no counterparty)
   accept-cancel <jobId> [--resolution <s>]              Accept a cancel request
   decline-cancel <jobId> [--resolution <s>]             Decline a cancel request
   accept-invite <jobId> <inviteId>                      Accept a job invite (signs tx)
@@ -153,8 +156,10 @@ if (!command) {
 
 command
   .run(argv.slice(1))
-  .then(() => process.exit(0))
+  .then(() => {
+    process.exitCode = 0
+  })
   .catch((err) => {
     process.stderr.write(`Error: ${err.message || err.code || String(err)}\n`)
-    process.exit(1)
+    process.exitCode = 1
   })

@@ -19,7 +19,7 @@ export async function run(argv) {
   let txHash = null
   if (acceptData?.acceptPayload) {
     try {
-      txHash = await signAndBroadcast(config.key, acceptData.acceptPayload)
+      txHash = await signAndBroadcast(sdk, config.key, acceptData.acceptPayload)
     } catch (err) {
       const msg = err.message ?? ''
       if (msg.includes('transfer amount exceeds balance') || msg.includes('insufficient funds'))

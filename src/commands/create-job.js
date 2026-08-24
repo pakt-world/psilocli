@@ -76,7 +76,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
       ...depositData.approve,
       chainId: depositData.approve.chainId ?? depositData.chainId,
     }
-    const approveTxHash = await signAndBroadcast(config.key, approveTx)
+    const approveTxHash = await signAndBroadcast(sdk, config.key, approveTx)
     note(`Approve tx confirmed — txHash: ${approveTxHash}`)
   }
 
@@ -87,7 +87,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
       ...depositData.deposit,
       chainId: depositData.deposit.chainId ?? depositData.chainId,
     }
-    const depositTxHash = await signAndBroadcast(config.key, depositTx)
+    const depositTxHash = await signAndBroadcast(sdk, config.key, depositTx)
     note(`Deposit tx confirmed — txHash: ${depositTxHash}`)
   }
 
@@ -121,7 +121,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
   if (inviteData?.invitePayload) {
     const tx = inviteData.invitePayload
     note(`Signing onInvite tx for chain ${tx.chainId}...`)
-    const txHash = await signAndBroadcast(config.key, tx)
+    const txHash = await signAndBroadcast(sdk, config.key, tx)
     sdkOk(
       await sdk.job.confirmTx(jobId, {
         step: 'onInvite',
@@ -159,14 +159,14 @@ async function resumeJob(sdk, config, jobId, inviteeAddress) {
     if (depositData?.approve) {
       note('Signing ERC-20 approve tx...')
       const approveTx = { ...depositData.approve, chainId: depositData.approve.chainId ?? depositData.chainId }
-      const approveTxHash = await signAndBroadcast(config.key, approveTx)
+      const approveTxHash = await signAndBroadcast(sdk, config.key, approveTx)
       note(`Approve tx confirmed — txHash: ${approveTxHash}`)
     }
 
     if (depositData?.deposit) {
       note('Signing deposit tx...')
       const depositTx = { ...depositData.deposit, chainId: depositData.deposit.chainId ?? depositData.chainId }
-      const depositTxHash = await signAndBroadcast(config.key, depositTx)
+      const depositTxHash = await signAndBroadcast(sdk, config.key, depositTx)
       note(`Deposit tx confirmed — txHash: ${depositTxHash}`)
     }
 
@@ -207,7 +207,7 @@ async function resumeJob(sdk, config, jobId, inviteeAddress) {
   if (inviteData?.invitePayload) {
     const tx = inviteData.invitePayload
     note(`Signing onInvite tx for chain ${tx.chainId}...`)
-    const txHash = await signAndBroadcast(config.key, tx)
+    const txHash = await signAndBroadcast(sdk, config.key, tx)
     sdkOk(
       await sdk.job.confirmTx(jobId, { step: 'onInvite', txHash, inviteeId: inviteeUserId }),
       'confirmTx onInvite',
