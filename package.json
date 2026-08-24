@@ -19,7 +19,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@pakt/psilo": "0.0.9",
+    "@pakt/psilo": "^0.1.0",
     "ethers": "^6.17.0"
   }
 }
