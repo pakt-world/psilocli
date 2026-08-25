@@ -1,8 +1,8 @@
 import { ethers } from 'ethers'
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit } from '../client.js'
-import { resolveRpc, readTokenBalance } from '../chains.js'
-import { out, print, fail } from '../output.js'
+import { fetchActiveRpc, resolveRpc, readTokenBalance } from '../chains.js'
+import { out, print, note, fail } from '../output.js'
 
 export const usage = 'psilocli balance [--chain <id>] [--token <0x>]'
 
@@ -13,9 +13,18 @@ export async function run(argv) {
   })
   const config = resolveConfig(values)
   const { sdk } = await cliInit(config)
-  const chainId = values.chain ?? '43113'
+  let chainId = values.chain
+  if (!chainId) {
+    const active = await fetchActiveRpc(sdk)
+    if (!active?.rpcChainId) {
+      fail(
+        'No active chain is configured on the server, and --chain was not provided. Pass --chain <id> explicitly before proceeding.',
+      )
+    }
+    chainId = String(active.rpcChainId)
+    note(`Active chain: ${active.rpcName ?? chainId} (chainId ${chainId})`)
+  }
   const { url: rpcUrl, symbol: nativeSymbol } = await resolveRpc(sdk, chainId)
-  if (!rpcUrl) fail(`No RPC URL configured for chain ${chainId}`)
   const provider = new ethers.JsonRpcProvider(rpcUrl)
   const raw = await provider.getBalance(config.address)
   const result = {
