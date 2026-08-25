@@ -120,7 +120,7 @@ async function send(argv) {
       convId = conv._id
       if (!convId) throw new Error('Could not open a conversation')
     }
-    messaging.sendMessage({
+    await messaging.sendMessage({
       conversationId: convId,
       type: msgType,
       ...(hasText        ? { message: text }   : {}),

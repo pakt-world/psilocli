@@ -1,6 +1,6 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
-import { signAndBroadcast } from '../chains.js'
+import { signAndBroadcast, fetchActiveRpc } from '../chains.js'
 import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
@@ -285,9 +285,13 @@ export async function run(argv) {
     if (DEFAULTS.chainId) {
       chainId = DEFAULTS.chainId
     } else {
-      const rpc = sdkOk(await sdk.payment.fetchActiveRpc(), 'payment.fetchActiveRpc')
-      chainId = rpc?.rpcChainId ? String(rpc.rpcChainId) : '43113'
-      note(`Active chain: ${rpc?.rpcName ?? chainId} (chainId ${chainId})`)
+      const rpc = await fetchActiveRpc(sdk)
+      if (!rpc?.rpcChainId)
+        fail(
+          'No active chain is configured on the server, and --chain-id was not provided. Pass --chain-id <id> explicitly before proceeding.',
+        )
+      chainId = String(rpc.rpcChainId)
+      note(`Active chain: ${rpc.rpcName ?? chainId} (chainId ${chainId})`)
     }
   }
   // -------------------------------------------------

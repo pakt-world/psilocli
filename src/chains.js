@@ -1,27 +1,14 @@
 import { ethers } from 'ethers'
 
-// Last-resort fallback for chains the server's active-RPC endpoint (below)
-// isn't currently reporting — e.g. a job signed while the backend had a
-// different chain active, or the chains-list and active-RPC endpoints
-// disagreeing (seen in practice: one still said Fuji while the other had
-// already moved to Base Sepolia). Extend this only when a chain a job
-// actually needs isn't coming back from the server.
-const FALLBACK_RPC_URLS = {
-  43113: 'https://api.avax-test.network/ext/bc/C/rpc', // Avalanche Fuji testnet
-  43114: 'https://api.avax.network/ext/bc/C/rpc', // Avalanche mainnet
-  84532: 'https://sepolia.base.org', // Base Sepolia testnet
-}
-
-const FALLBACK_NATIVE_SYMBOLS = {
-  43113: 'AVAX',
-  43114: 'AVAX',
-  84532: 'ETH',
-}
-
 // sdk.payment.fetchActiveRpc() is public (no auth) and only ever describes
 // the single chain the server currently has active — not an arbitrary
-// chainId → RPC directory. Use it when it matches, fall back otherwise.
-async function fetchActiveRpc(sdk) {
+// chainId → RPC directory.
+//
+// There is no hardcoded fallback RPC. If the server has no active RPC
+// configured, or its active RPC doesn't match the chain a command needs,
+// callers must stop and ask the user to pass --chain explicitly rather than
+// silently operating against a guessed or stale network.
+export async function fetchActiveRpc(sdk) {
   try {
     const result = await sdk.payment.fetchActiveRpc()
     if (!result || result.status === 'error') return null
@@ -31,25 +18,35 @@ async function fetchActiveRpc(sdk) {
   }
 }
 
-// Resolves { url, symbol } for chainId, preferring the server's currently
-// active RPC over the static fallback map.
+// Resolves { url, symbol } for chainId strictly from the server's active RPC.
+// Throws (never falls back) if no active RPC is configured, or if it doesn't
+// match the requested chainId.
 export async function resolveRpc(sdk, chainId) {
   const active = await fetchActiveRpc(sdk)
-  if (active && String(active.rpcChainId) === String(chainId)) {
-    return {
-      url: active.rpcUrls?.[0],
-      symbol: active.rpcNativeCurrency?.symbol,
-    }
+  if (!active) {
+    throw new Error(
+      'No active RPC is configured on the server. Pass --chain explicitly, or have the server configure an active RPC, before proceeding.',
+    )
+  }
+  if (chainId && String(active.rpcChainId) !== String(chainId)) {
+    throw new Error(
+      `No RPC is available for chain ${chainId} — the server's active chain is ${active.rpcChainId}. Pass --chain ${active.rpcChainId}, or omit --chain to use the active chain.`,
+    )
+  }
+  if (!active.rpcUrls?.[0]) {
+    throw new Error(
+      `The server's active chain (${active.rpcChainId}) has no RPC URL configured. Cannot proceed.`,
+    )
   }
   return {
-    url: FALLBACK_RPC_URLS[chainId],
-    symbol: FALLBACK_NATIVE_SYMBOLS[chainId],
+    url: active.rpcUrls[0],
+    symbol: active.rpcNativeCurrency?.symbol,
+    chainId: String(active.rpcChainId),
   }
 }
 
 export async function resolveRpcUrl(sdk, chainId) {
   const { url } = await resolveRpc(sdk, chainId)
-  if (!url) throw new Error(`No RPC URL configured for chain ${chainId}`)
   return url
 }
 
