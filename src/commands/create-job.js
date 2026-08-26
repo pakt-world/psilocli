@@ -1,6 +1,6 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
-import { signAndBroadcast, fetchActiveRpc } from '../chains.js'
+import { signAndBroadcast, resolveRpc } from '../chains.js'
 import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
@@ -273,10 +273,10 @@ export async function run(argv) {
     asset    = coin.isToken ? (coin.contractAddress ?? '') : ''
     currency = coin._id
     if (!chainId) {
-      chainId = String(coin.rpcChainId)
-    } else if (parseInt(chainId, 10) !== coin.rpcChainId) {
-      note(`WARNING: --chain-id ${chainId} conflicts with ${coin.symbol} chain (${coin.rpcChainId}). Using coin's chain.`)
-      chainId = String(coin.rpcChainId)
+      chainId = String((coin.rpcChainIds ?? [])[0] ?? '')
+    } else if (!(coin.rpcChainIds ?? []).map(String).includes(String(chainId))) {
+      note(`WARNING: --chain-id ${chainId} not in ${coin.symbol} chains (${(coin.rpcChainIds ?? []).join(', ')}). Using coin's first chain.`)
+      chainId = String((coin.rpcChainIds ?? [])[0] ?? '')
     }
     note(`Coin: ${coin.name} (${coin.symbol})${coin.isToken ? ` — contract ${asset}` : ' — native'}`)
   }
@@ -285,13 +285,9 @@ export async function run(argv) {
     if (DEFAULTS.chainId) {
       chainId = DEFAULTS.chainId
     } else {
-      const rpc = await fetchActiveRpc(sdk)
-      if (!rpc?.rpcChainId)
-        fail(
-          'No active chain is configured on the server, and --chain-id was not provided. Pass --chain-id <id> explicitly before proceeding.',
-        )
-      chainId = String(rpc.rpcChainId)
-      note(`Active chain: ${rpc.rpcName ?? chainId} (chainId ${chainId})`)
+      const { chainId: defaultChainId, name: chainName } = await resolveRpc(sdk, null)
+      chainId = defaultChainId
+      note(`Default chain: ${chainName} (chainId ${chainId})`)
     }
   }
   // -------------------------------------------------

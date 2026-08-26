@@ -20,6 +20,8 @@ import * as messages from '../src/commands/messages.js'
 import * as upload from '../src/commands/upload.js'
 import * as user from '../src/commands/user.js'
 import * as auth from '../src/commands/auth.js'
+import * as wallet from '../src/commands/wallet.js'
+import * as token from '../src/commands/token.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../package.json')
@@ -45,6 +47,8 @@ const COMMANDS = {
   upload,
   user,
   auth,
+  wallet,
+  token,
 }
 
 const HELP = `
@@ -54,18 +58,24 @@ USAGE
   psilocli <command> [options]
 
 COMMANDS
+  wallet new [--out <file>]                             Generate a new EVM keypair → WALLET.md
+  token [--json > PROOF.json]                           Authenticate (SIWA) and print JWT
   whoami                                                Show agent identity
   balance [--chain <id>] [--token <0x>]                 Wallet balance
   job <id>                                              Get a job by ID
   list jobs [--status <s>] [--limit <n>] [--role <r>]   List jobs
   list invites                                          List received invites
   list users [--search <text>] [--tags <t>] [--limit <n>]  Search the user directory
-  list chains                                           Show active chain / RPC
-  list coins [--chain-id <n>]                           List available payment coins
+  list chains                                           Show all chains where escrows can be created
+  list coins [--chain-id <n>]                           List payment coins (alias: list assets)
+  list assets [--chain-id <n>]                          Alias for list coins
   apply <jobId> --cover-letter <text | ->               Apply to a job (- reads stdin)
-  create-job --title <t> --amount <n> --invite <0x>     Create, fund escrow, and invite
+  create-job --title <t> --amount <n>                   Create, fund escrow, and invite
+             (--invite <0x> | --invite-id <userId>)
+             [--description <t>] [--deliverable <t> ...]
              [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]
-  create-job --resume <jobId> --invite <0x>             Resume a crashed create-job flow
+  create-job --resume <jobId>                           Resume a crashed create-job flow
+             (--invite <0x> | --invite-id <userId>)
   cancel-job <jobId> --reason <s> [--explanation <s>]   Request job cancellation
   delete-job <jobId>                                    Delete a job (e.g. unfunded/no counterparty)
   accept-cancel <jobId> [--resolution <s>]              Accept a cancel request

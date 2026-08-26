@@ -45,20 +45,35 @@ harmless to keep).
 
 ## Payment discovery (`sdk.payment`)
 
-Before creating a job, query the server for the active chain and available coins:
+Before creating a job, query the server for available chains and coins:
 
 ```sh
-psilocli list chains          # shows active RPC (name, chainId, native currency)
-psilocli list coins           # shows all active payment coins
-psilocli list coins --chain-id 43113   # filter by chain
+psilocli list chains          # all chains where escrows can be created (isDefault marked)
+psilocli list coins           # all active payment coins
+psilocli list coins --chain-id 84532   # filter by chain (resolved server-side via rpcServerId)
 ```
 
 Internally these call:
 
 ```
-sdk.payment.fetchActiveRpc()      GET /v1/payment/rpc    (public — no auth required)
-sdk.payment.fetchPaymentCoins()   GET /v1/payment/coins  (public — no auth required)
+sdk.payment.fetchAvailableChains()          GET /v1/payment/chains  (public — no auth required)
+sdk.payment.fetchActiveRpc()                GET /v1/payment/rpc     (public — no auth required)
+sdk.payment.fetchPaymentCoins({ rpcId? })   GET /v1/payment/coins   (public — no auth required)
 ```
+
+`fetchAvailableChains()` returns `AvailableChain[]`. Each record has:
+
+| Field          | Meaning                                                      |
+| -------------- | ------------------------------------------------------------ |
+| `rpcServerId`  | ID of the backing RPC server record (pass as `rpcId` to `fetchPaymentCoins`) |
+| `chainId`      | EVM chain ID (string)                                        |
+| `name`         | Human-readable chain name                                    |
+| `rpcUrls`      | RPC endpoints for signing transactions                       |
+| `nativeCurrency` | `{ name, symbol, decimals }`                               |
+| `isDefault`    | True for the chain used when no `chainId` is sent            |
+| `factoryAddress` | Escrow factory contract address                            |
+
+`resolveRpc(sdk, chainId?)` in `src/chains.js` now uses `fetchAvailableChains()` — it finds the chain by `chainId`, or picks `isDefault` when no `chainId` is given. This means signing works for any available chain, not just the server's currently-active one.
 
 `fetchPaymentCoins()` returns `PaymentCoin[]`. Each record has:
 
@@ -94,10 +109,10 @@ Pre-flight (optional):
   list coins   → sdk.payment.fetchPaymentCoins()
 
 create-job:
-  sdk.payment.fetchPaymentCoins()  (when --coin is used)
-  sdk.payment.fetchActiveRpc()     (when chain-id not otherwise known)
-  user.getUserByWalletAddress()    (--invite: resolve address → userId, pre-flight)
-  user.getUserById()               (--invite-id: validate userId exists, pre-flight)
+  sdk.payment.fetchPaymentCoins()       (when --coin is used)
+  sdk.payment.fetchAvailableChains()    (chain resolution via resolveRpc — replaces fetchActiveRpc)
+  user.getUserByWalletAddress()         (--invite: resolve address → userId, pre-flight)
+  user.getUserById()                    (--invite-id: validate userId exists, pre-flight)
   job.create(dto)
   job.makeDeposit(jobId)
   sign ERC-20 approve tx           (ERC-20 tokens only)

@@ -1,47 +1,54 @@
 import { ethers } from 'ethers'
 
-// sdk.payment.fetchActiveRpc() is public (no auth) and only ever describes
-// the single chain the server currently has active — not an arbitrary
-// chainId → RPC directory.
-//
-// There is no hardcoded fallback RPC. If the server has no active RPC
-// configured, or its active RPC doesn't match the chain a command needs,
-// callers must stop and ask the user to pass --chain explicitly rather than
-// silently operating against a guessed or stale network.
-export async function fetchActiveRpc(sdk) {
+// Fetches all chains on which new escrows can be created.
+export async function fetchAvailableChains(sdk) {
   try {
-    const result = await sdk.payment.fetchActiveRpc()
-    if (!result || result.status === 'error') return null
-    return result.data ?? null
+    const result = await sdk.payment.fetchAvailableChains()
+    if (!result || result.status === 'error') return []
+    return result.data ?? []
   } catch {
-    return null
+    return []
   }
 }
 
-// Resolves { url, symbol } for chainId strictly from the server's active RPC.
-// Throws (never falls back) if no active RPC is configured, or if it doesn't
-// match the requested chainId.
+// Resolves { url, symbol, chainId } for a given chainId from the server's
+// list of available chains. Falls back to the active RPC when no chainId is
+// specified (picks the default chain). Throws if the chain isn't found.
 export async function resolveRpc(sdk, chainId) {
-  const active = await fetchActiveRpc(sdk)
-  if (!active) {
+  const chains = await fetchAvailableChains(sdk)
+
+  let chain
+  if (chainId) {
+    chain = chains.find(c => String(c.chainId) === String(chainId))
+    if (!chain) {
+      const ids = chains.map(c => c.chainId).join(', ') || 'none'
+      throw new Error(
+        `Chain ${chainId} is not available on this server. Available chains: ${ids}.`,
+      )
+    }
+  } else {
+    chain = chains.find(c => c.isDefault) ?? chains[0]
+    if (!chain) {
+      throw new Error(
+        'No chains are configured on this server. Cannot proceed.',
+      )
+    }
+  }
+
+  const url = chain.rpcUrls?.[0]
+  if (!url) {
     throw new Error(
-      'No active RPC is configured on the server. Pass --chain explicitly, or have the server configure an active RPC, before proceeding.',
+      `Chain ${chain.chainId} (${chain.name ?? 'unknown'}) has no RPC URL configured on the server.`,
     )
   }
-  if (chainId && String(active.rpcChainId) !== String(chainId)) {
-    throw new Error(
-      `No RPC is available for chain ${chainId} — the server's active chain is ${active.rpcChainId}. Pass --chain ${active.rpcChainId}, or omit --chain to use the active chain.`,
-    )
-  }
-  if (!active.rpcUrls?.[0]) {
-    throw new Error(
-      `The server's active chain (${active.rpcChainId}) has no RPC URL configured. Cannot proceed.`,
-    )
-  }
+
   return {
-    url: active.rpcUrls[0],
-    symbol: active.rpcNativeCurrency?.symbol,
-    chainId: String(active.rpcChainId),
+    url,
+    name: chain.name ?? String(chain.chainId),
+    symbol: chain.nativeCurrency?.symbol,
+    chainId: String(chain.chainId),
+    rpcServerId: chain.rpcServerId,
+    isDefault: chain.isDefault,
   }
 }
 

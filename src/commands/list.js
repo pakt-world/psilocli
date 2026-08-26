@@ -1,5 +1,6 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
+import { fetchAvailableChains } from '../chains.js'
 import { out, print, fail, cliTable } from '../output.js'
 
 export const usage =
@@ -7,7 +8,7 @@ export const usage =
   'psilocli list invites\n' +
   'psilocli list users [--search <text>] [--tags <t>] [--username <s>] [--role <r>] [--limit <n>] [--page <n>]\n' +
   'psilocli list chains\n' +
-  'psilocli list coins [--chain-id <n>]'
+  'psilocli list coins [--chain-id <n>]  (alias: list assets)'
 
 export async function run(argv) {
   const sub = argv[0]
@@ -134,42 +135,63 @@ export async function run(argv) {
     const { values } = parseCommand(argv.slice(1))
     const config = resolveConfig(values)
     const { sdk } = await cliInit(config)
-    const rpc = sdkOk(await sdk.payment.fetchActiveRpc(), 'payment.fetchActiveRpc')
+    const chains = await fetchAvailableChains(sdk)
     if (config.json) {
-      out(rpc)
-    } else if (!rpc) {
-      print('No active RPC configured on this server.')
+      out(chains)
+    } else if (chains.length === 0) {
+      print('No chains configured on this server.')
     } else {
       cliTable(
-        [[
-          String(rpc.rpcChainId),
-          rpc.rpcName,
-          rpc.rpcNativeCurrency?.symbol ?? '',
-          rpc.rpcType ?? '',
-          (rpc.rpcUrls ?? []).slice(0, 2).join(', ').slice(0, 60),
-        ]],
-        ['Chain ID', 'Name', 'Native', 'Type', 'RPC URLs'],
+        chains.map(c => [
+          String(c.chainId),
+          c.name ?? '',
+          c.nativeCurrency?.symbol ?? '',
+          c.rpcType ?? '',
+          c.isDefault ? 'yes' : '',
+          (c.rpcUrls ?? []).slice(0, 2).join(', ').slice(0, 55),
+        ]),
+        ['Chain ID', 'Name', 'Native', 'Type', 'Default', 'RPC URLs'],
       )
     }
     return
   }
 
-  if (sub === 'coins') {
+  if (sub === 'coins' || sub === 'assets') {
     const { values } = parseCommand(argv.slice(1), {
       'chain-id': { type: 'string' },
     })
     const config = resolveConfig(values)
     const { sdk } = await cliInit(config)
-    const allCoins = sdkOk(await sdk.payment.fetchPaymentCoins(), 'payment.fetchPaymentCoins')
+
+    const query = values['chain-id'] ? { chainId: values['chain-id'] } : {}
+    const allCoins = sdkOk(await sdk.payment.fetchPaymentCoins(query), 'payment.fetchPaymentCoins')
     let coins = (Array.isArray(allCoins) ? allCoins : []).filter(c => c.active)
+
+    // Always filter client-side too — the server's coins list can include coins
+    // that aren't scoped to the requested chain's rpcChainIds.
     if (values['chain-id']) {
-      const id = parseInt(values['chain-id'], 10)
-      coins = coins.filter(c => c.rpcChainId === id)
+      coins = coins.filter(c => (c.rpcChainIds ?? []).map(String).includes(String(values['chain-id'])))
     }
+
     if (config.json) {
       out(coins)
     } else if (coins.length === 0) {
-      print('No active coins found.')
+      if (values['chain-id']) {
+        // Show which chains actually have coins so the caller isn't left guessing.
+        const allCoins = sdkOk(
+          await sdk.payment.fetchPaymentCoins(),
+          'payment.fetchPaymentCoins',
+        )
+        const active = (Array.isArray(allCoins) ? allCoins : []).filter(c => c.active)
+        const chainIds = [...new Set(active.flatMap(c => (c.rpcChainIds ?? []).map(String)))]
+        if (chainIds.length) {
+          print(`No active coins on chain ${values['chain-id']}. Chains with coins: ${chainIds.join(', ')}`)
+        } else {
+          print('No active coins found on any chain.')
+        }
+      } else {
+        print('No active coins found.')
+      }
     } else {
       cliTable(
         coins.map(c => [
@@ -179,7 +201,7 @@ export async function run(argv) {
           c.isToken
             ? `${(c.contractAddress ?? '').slice(0, 10)}…${(c.contractAddress ?? '').slice(-4)}`
             : '—',
-          String(c.rpcChainId),
+          (c.rpcChainIds ?? []).join(', '),
         ]),
         ['Symbol', 'Name', 'Type', 'Contract', 'Chain ID'],
       )
