@@ -57,9 +57,9 @@ psilocli apply <jobId> --cover-letter "I can deliver this."
 echo "cover letter from a file" | psilocli apply <jobId> --cover-letter -
 
 # Discover chains and coins before creating a job
-psilocli list chains                        # show active chain / RPC
-psilocli list coins                         # show available payment coins
-psilocli list coins --chain-id 43113        # filter by chain
+psilocli list chains                        # all chains where escrows can be created (default marked)
+psilocli list coins                         # all active payment coins
+psilocli list coins --chain-id 43113        # filter by chain (server-side via rpcServerId)
 
 # Buyer flow: create job → fund escrow on-chain → invite talent
 # Recommended: --coin auto-resolves chain, asset, and currency
@@ -204,10 +204,12 @@ What happens under the hood:
 4. `job.makeDeposit(jobId)` → server returns ERC-20 `approve` + `deposit` tx payloads
 5. Signs & broadcasts `approve` tx (grants escrow contract allowance) — ERC-20 only
 6. Signs & broadcasts `deposit` tx (moves funds into escrow)
+   - RPC URL is resolved via `payment.fetchAvailableChains()` — works for any available chain,
+     not just the server's currently-active one
 7. `job.validatePayment(jobId)` → polls up to 6×10s until on-chain confirmation
 8. `job.inviteTalent(jobId)` → signs `onInvite` tx → `job.confirmTx(jobId, { step: 'onInvite' })`
 
-For native AVAX jobs, step 5 (approve) is skipped.
+For native coin jobs, step 5 (approve) is skipped.
 
 ## On-chain steps
 
