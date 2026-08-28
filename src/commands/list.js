@@ -148,9 +148,9 @@ export async function run(argv) {
           c.nativeCurrency?.symbol ?? '',
           c.rpcType ?? '',
           c.isDefault ? 'yes' : '',
-          (c.rpcUrls ?? []).slice(0, 2).join(', ').slice(0, 55),
+          (c.blockExplorerUrls ?? []).slice(0, 2).join(', ').slice(0, 55),
         ]),
-        ['Chain ID', 'Name', 'Native', 'Type', 'Default', 'RPC URLs'],
+        ['Chain ID', 'Name', 'Native', 'Type', 'Default', 'Block Explorer'],
       )
     }
     return

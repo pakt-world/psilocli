@@ -74,8 +74,9 @@ COMMANDS
              (--invite <0x> | --invite-id <userId>)
              [--description <t>] [--deliverable <t> ...]
              [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]
+             [--rpc <url>]
   create-job --resume <jobId>                           Resume a crashed create-job flow
-             (--invite <0x> | --invite-id <userId>)
+             (--invite <0x> | --invite-id <userId>) [--rpc <url>]
   cancel-job <jobId> --reason <s> [--explanation <s>]   Request job cancellation
   delete-job <jobId>                                    Delete a job (e.g. unfunded/no counterparty)
   accept-cancel <jobId> [--resolution <s>]              Accept a cancel request

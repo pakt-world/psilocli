@@ -7,8 +7,8 @@ import { out, print, note, fail } from '../output.js'
 export const usage =
   'psilocli create-job --title <t> --amount <n> [--invite <0x> | --invite-id <userId>] [--description <t>]\n' +
   '                    [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]\n' +
-  '                    [--deliverable <t> ...]\n' +
-  'psilocli create-job --resume <jobId> [--invite <0x> | --invite-id <userId>]  Resume a crashed create-job flow'
+  '                    [--deliverable <t> ...] [--rpc <url>]\n' +
+  'psilocli create-job --resume <jobId> [--invite <0x> | --invite-id <userId>] [--rpc <url>]  Resume a crashed create-job flow'
 
 const DEFAULTS = {
   description:
@@ -31,7 +31,7 @@ async function resolveUserIdByAddress(sdk, address) {
   return String(userId)
 }
 
-export async function createJobAndInvite(sdk, config, inviteeAddress, params, inviteeUserIdOverride = null) {
+export async function createJobAndInvite(sdk, config, inviteeAddress, params, inviteeUserIdOverride = null, rpcOverride = null) {
   let inviteeUserId
   if (inviteeUserIdOverride) {
     // Validate the user ID exists before touching the chain.
@@ -76,7 +76,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
       ...depositData.approve,
       chainId: depositData.approve.chainId ?? depositData.chainId,
     }
-    const approveTxHash = await signAndBroadcast(sdk, config.key, approveTx)
+    const approveTxHash = await signAndBroadcast(sdk, config.key, approveTx, rpcOverride)
     note(`Approve tx confirmed — txHash: ${approveTxHash}`)
   }
 
@@ -87,7 +87,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
       ...depositData.deposit,
       chainId: depositData.deposit.chainId ?? depositData.chainId,
     }
-    const depositTxHash = await signAndBroadcast(sdk, config.key, depositTx)
+    const depositTxHash = await signAndBroadcast(sdk, config.key, depositTx, rpcOverride)
     note(`Deposit tx confirmed — txHash: ${depositTxHash}`)
   }
 
@@ -121,7 +121,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
   if (inviteData?.invitePayload) {
     const tx = inviteData.invitePayload
     note(`Signing onInvite tx for chain ${tx.chainId}...`)
-    const txHash = await signAndBroadcast(sdk, config.key, tx)
+    const txHash = await signAndBroadcast(sdk, config.key, tx, rpcOverride)
     sdkOk(
       await sdk.job.confirmTx(jobId, {
         step: 'onInvite',
@@ -137,7 +137,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
   return { jobId, inviteeAddress, inviteeUserId }
 }
 
-async function resumeJob(sdk, config, jobId, inviteeAddress) {
+async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null) {
   note('WARNING: Multi-step on-chain flow (~60s). Do not interrupt or wrap in a timeout.')
 
   const jobData = sdkOk(await sdk.job.getById(jobId), 'job.getById')
@@ -159,14 +159,14 @@ async function resumeJob(sdk, config, jobId, inviteeAddress) {
     if (depositData?.approve) {
       note('Signing ERC-20 approve tx...')
       const approveTx = { ...depositData.approve, chainId: depositData.approve.chainId ?? depositData.chainId }
-      const approveTxHash = await signAndBroadcast(sdk, config.key, approveTx)
+      const approveTxHash = await signAndBroadcast(sdk, config.key, approveTx, rpcOverride)
       note(`Approve tx confirmed — txHash: ${approveTxHash}`)
     }
 
     if (depositData?.deposit) {
       note('Signing deposit tx...')
       const depositTx = { ...depositData.deposit, chainId: depositData.deposit.chainId ?? depositData.chainId }
-      const depositTxHash = await signAndBroadcast(sdk, config.key, depositTx)
+      const depositTxHash = await signAndBroadcast(sdk, config.key, depositTx, rpcOverride)
       note(`Deposit tx confirmed — txHash: ${depositTxHash}`)
     }
 
@@ -207,7 +207,7 @@ async function resumeJob(sdk, config, jobId, inviteeAddress) {
   if (inviteData?.invitePayload) {
     const tx = inviteData.invitePayload
     note(`Signing onInvite tx for chain ${tx.chainId}...`)
-    const txHash = await signAndBroadcast(sdk, config.key, tx)
+    const txHash = await signAndBroadcast(sdk, config.key, tx, rpcOverride)
     sdkOk(
       await sdk.job.confirmTx(jobId, { step: 'onInvite', txHash, inviteeId: inviteeUserId }),
       'confirmTx onInvite',
@@ -232,15 +232,17 @@ export async function run(argv) {
     invite:       { type: 'string' },
     'invite-id':  { type: 'string' },
     resume:       { type: 'string' },
+    rpc:          { type: 'string' },
   })
   const inviteeAddress = values.invite ?? process.env.INVITE_AGENT_ADDRESS
   const inviteeIdDirect = values['invite-id'] ?? null
+  const rpcOverride = values.rpc ?? null
 
   // --resume: skip creation, pick up from the right checkpoint
   if (values.resume) {
     const config = resolveConfig(values)
     const { sdk } = await cliInit(config)
-    const result = await resumeJob(sdk, config, values.resume, inviteeAddress)
+    const result = await resumeJob(sdk, config, values.resume, inviteeAddress, rpcOverride)
     if (config.json) out({ ok: true, ...result })
     else print(`Job ${result.jobId} resumed successfully`)
     return
@@ -301,7 +303,7 @@ export async function run(argv) {
     chainId,
     asset,
     deliverables: values.deliverable ?? [DEFAULTS.deliverable],
-  }, inviteeIdDirect)
+  }, inviteeIdDirect, rpcOverride)
   if (config.json) out({ ok: true, ...result })
   else print(`Job created and invite sent — jobId: ${result.jobId}`)
 }

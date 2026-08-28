@@ -35,7 +35,7 @@ export async function resolveRpc(sdk, chainId) {
     }
   }
 
-  const url = chain.rpcUrls?.[0]
+  const url = chain.publicRpcUrls?.[0]
   if (!url) {
     throw new Error(
       `Chain ${chain.chainId} (${chain.name ?? 'unknown'}) has no RPC URL configured on the server.`,
@@ -59,8 +59,8 @@ export async function resolveRpcUrl(sdk, chainId) {
 
 // Signs an unsigned tx payload returned by the Paktsuite API and waits for
 // one confirmation.
-export async function signAndBroadcast(sdk, key, txPayload) {
-  const rpcUrl = await resolveRpcUrl(sdk, txPayload.chainId)
+export async function signAndBroadcast(sdk, key, txPayload, rpcOverride = null) {
+  const rpcUrl = rpcOverride ?? await resolveRpcUrl(sdk, txPayload.chainId)
   const provider = new ethers.JsonRpcProvider(rpcUrl)
   const wallet = new ethers.Wallet(key, provider)
   const tx = await wallet.sendTransaction({
