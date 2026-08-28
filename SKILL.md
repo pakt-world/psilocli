@@ -14,7 +14,7 @@ state.
 │                                                        │
 │  PsiloSDK (REST)   ←→  Paktsuite API                   │
 │  MessagingService  ←→  Paktsuite WS (messages … only)  │
-│  ethers.js         ←→  EVM chain (Avalanche)           │
+│  ethers.js         ←→  EVM chain (multi-chain, dynamic)  │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -68,7 +68,7 @@ sdk.payment.fetchPaymentCoins({ rpcId? })   GET /v1/payment/coins   (public — 
 | `rpcServerId`  | ID of the backing RPC server record (pass as `rpcId` to `fetchPaymentCoins`) |
 | `chainId`      | EVM chain ID (string)                                        |
 | `name`         | Human-readable chain name                                    |
-| `rpcUrls`      | RPC endpoints for signing transactions                       |
+| `publicRpcUrls` | RPC endpoints for signing transactions (used by `resolveRpc`) |
 | `nativeCurrency` | `{ name, symbol, decimals }`                               |
 | `isDefault`    | True for the chain used when no `chainId` is sent            |
 | `factoryAddress` | Escrow factory contract address                            |
@@ -83,7 +83,7 @@ sdk.payment.fetchPaymentCoins({ rpcId? })   GET /v1/payment/coins   (public — 
 | `symbol`          | Human-readable ticker (e.g. `USDC`, `AVAX`)          |
 | `contractAddress` | ERC-20 address; absent on native coins               |
 | `isToken`         | `true` = ERC-20, `false` = native coin               |
-| `rpcChainId`      | Chain this coin lives on                             |
+| `rpcChainIds`     | Array of chain IDs this coin is active on (strings)  |
 | `active`          | Only active coins are usable                         |
 
 ### `--coin <symbol>` resolution in `create-job`
@@ -94,10 +94,12 @@ auto-resolves three fields so you don't have to look them up manually:
 1. Fetches all active coins, finds one whose `symbol` matches (case-insensitive).
 2. Sets `asset = coin.contractAddress` for ERC-20 tokens, `''` for native coins.
 3. Sets `currency = coin._id` — **the server stores the coin record's `_id`, not the symbol**.
-4. Sets `chainId = String(coin.rpcChainId)` unless `--chain-id` overrides it.
+4. Sets `chainId = coin.rpcChainIds[0]` unless `--chain-id` overrides it
+   (and warns if `--chain-id` is not in `coin.rpcChainIds`).
 
 If neither `--coin` nor `--chain-id` nor `JOB_CHAIN_ID` is set, `create-job`
-calls `fetchActiveRpc()` to read the server's currently active chain.
+calls `resolveRpc(sdk, null)` which picks the `isDefault` chain from
+`fetchAvailableChains()`.
 
 ## Job lifecycle and SDK calls
 
@@ -105,7 +107,7 @@ calls `fetchActiveRpc()` to read the server's currently active chain.
 Buyer                                Seller
 ─────────────────────────────────────────────────────────────────────
 Pre-flight (optional):
-  list chains  → sdk.payment.fetchActiveRpc()
+  list chains  → sdk.payment.fetchAvailableChains()
   list coins   → sdk.payment.fetchPaymentCoins()
 
 create-job:
@@ -227,7 +229,7 @@ Both paths run before `job.create` so a bad invitee fails fast with no on-chain 
   "title":        "--title",
   "description":  "--description or JOB_DESCRIPTION",
   "amount":       "--amount (string, e.g. '100')",
-  "chainId":      "resolved: --chain-id > --coin.rpcChainId > JOB_CHAIN_ID > active RPC",
+  "chainId":      "resolved: --chain-id > --coin.rpcChainIds[0] > JOB_CHAIN_ID > resolveRpc(sdk, null)",
   "currency":     "coin._id  (set by --coin)  OR  raw --currency value",
   "asset":        "coin.contractAddress for ERC-20; omitted for native coins",
   "deliverables": [{ "name": "..." }]
@@ -236,16 +238,14 @@ Both paths run before `job.create` so a bad invitee fails fast with no on-chain 
 
 ## Chain / transaction signing
 
-`src/chains.js` → `signAndBroadcast(sdk, key, txPayload)`:
+`src/chains.js` → `signAndBroadcast(sdk, key, txPayload, rpcOverride = null)`:
 
-- Resolves the RPC via `resolveRpc(sdk, chainId)`: calls the server's
-  `sdk.payment.fetchActiveRpc()` (public, no auth) and uses its `rpcUrls[0]`
-  when `rpcChainId` matches. That endpoint only ever describes the one chain
-  the server currently has active, so a small `FALLBACK_RPC_URLS`/
-  `FALLBACK_NATIVE_SYMBOLS` map in `chains.js` covers chains a job might still
-  need signing for (43113 Fuji, 43114 Avalanche mainnet, 84532 Base Sepolia)
-  when the active chain doesn't match — extend that map for new chains, but
-  prefer the server's answer whenever it applies.
+- Resolves the RPC via `resolveRpc(sdk, chainId)`: calls
+  `fetchAvailableChains()` and returns `chain.publicRpcUrls[0]` for the
+  matched chain (or the `isDefault` chain when no `chainId` is given). No
+  hardcoded fallback URLs — all RPC endpoints are server-sourced.
+- Pass `rpcOverride` (from `--rpc <url>`) to bypass the server-provided URL.
+  Useful when `publicRpcUrls[0]` is rate-limited (e.g. Tenderly free tier).
 - Signs with `ethers.Wallet`, sends, and **waits one confirmation**
   (`tx.wait()`), so callers never need blind sleeps after it returns.
 - API tx payloads are unsigned `{ to, data, value, gas, maxFeePerGas,
@@ -349,7 +349,7 @@ flags are never sent so the API treats them as no-ops.
 | `JOB_AMOUNT`           | `--amount`        | Default `'1'`                                       |
 | `JOB_COIN`             | `--coin`          | Symbol e.g. `USDC` — resolves asset + currency automatically |
 | `JOB_CURRENCY`         | `--currency`      | Raw coin `_id` override; prefer `JOB_COIN`          |
-| `JOB_CHAIN_ID`         | `--chain-id`      | Explicit chain; if unset, fetched from active RPC   |
+| `JOB_CHAIN_ID`         | `--chain-id`      | Explicit chain; if unset, resolved from `fetchAvailableChains()` isDefault |
 | `JOB_ASSET`            | `--asset`         | Raw ERC-20 address override; prefer `JOB_COIN`      |
 | `JOB_DELIVERABLE`      | `--deliverable`   | Has a built-in default                              |
 
@@ -367,10 +367,12 @@ flags are never sent so the API treats them as no-ops.
 
 Export `AGENT_PRIVATE_KEY` and `AGENT_ADDRESS`, or pass `-k`/`-a`.
 
-### `No RPC URL configured for chain <id>`
+### `Chain <id> is not available on this server`
 
-The tx payload's `chainId` is missing or the chain isn't in
-`src/chains.js` → `RPC_URLS`. Add the chain or pass `--chain-id`.
+The requested `chainId` isn't in the server's `GET /v1/payment/chains`
+response, or `publicRpcUrls` is empty for that chain. Run
+`psilocli list chains --json` to see what the server currently exposes.
+Use `--rpc <url>` to supply an RPC endpoint directly if the server omits it.
 
 ### `validatePayment attempt n/6 failed`
 

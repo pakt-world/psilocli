@@ -46,8 +46,11 @@ export INVITE_AGENT_ADDRESS=0x...  # default invitee wallet address (--invite-id
 
 ```sh
 # Identity and wallet
+psilocli wallet new                              # generate EVM keypair → WALLET.md (mode 600)
+psilocli token                                   # SIWA login, print JWT
+psilocli token --json > PROOF.json              # machine-readable { address, userId, jwt }
 psilocli whoami
-psilocli balance --chain 43113 --token 0xTOKEN
+psilocli balance --chain 84532 --token 0xTOKEN
 
 # Jobs
 psilocli list jobs --status open --limit 20 --role buyer
@@ -59,7 +62,8 @@ echo "cover letter from a file" | psilocli apply <jobId> --cover-letter -
 # Discover chains and coins before creating a job
 psilocli list chains                        # all chains where escrows can be created (default marked)
 psilocli list coins                         # all active payment coins
-psilocli list coins --chain-id 43113        # filter by chain (server-side via rpcServerId)
+psilocli list coins --chain-id 84532        # filter by chain (alias: list assets --chain-id 84532)
+psilocli list assets --chain-id 84532       # alias for list coins
 
 # Buyer flow: create job → fund escrow on-chain → invite talent
 # Recommended: --coin auto-resolves chain, asset, and currency
@@ -98,6 +102,10 @@ psilocli reviews <userId>
 # Resume a crashed create-job (e.g. interrupted after deposit, before invite)
 psilocli create-job --resume <jobId> --invite 0xSELLER_ADDRESS
 psilocli create-job --resume <jobId> --invite-id <userId>
+
+# Override the RPC endpoint (useful when the server's publicRpcUrl is rate-limited)
+psilocli create-job ... --rpc https://sepolia.base.org
+psilocli create-job --resume <jobId> --invite 0xSELLER --rpc https://sepolia.base.org
 
 # Messaging
 psilocli messages list
@@ -168,35 +176,36 @@ existing request ID rather than creating a duplicate.
 ## Creating a job: full flow
 
 ```sh
-# 1. Check what chain the platform is running on
+# 1. Check what chain the platform is running on (default is server-controlled)
 psilocli list chains
-#  Chain ID  Name              Native  Type      RPC URLs
-#  43113     Avalanche Fuji    AVAX    testnet   https://api.avax-test.network/...
+#  Chain ID  Name                  Native  Default
+#  84532     Base Sepolia Testnet  BASE    yes
+#  43113     Avalanche Fuji        AVAX
 
-# 2. See what coins are available
-psilocli list coins --chain-id 43113
-#  Symbol  Name              Type    Contract      Chain ID
-#  AVAX    Avalanche         Native  —             43113
-#  USDC    USD Coin          ERC-20  0x5425890…    43113
+# 2. See what coins are available on the default chain
+psilocli list coins --chain-id 84532
+#  Symbol  Name  Type    Contract          Chain ID
+#  USDC    USDC  ERC-20  0x036CbD53…CF7e  43113, 84532, ...
 
 # 3. Check your balance
-psilocli balance --token 0x5425890298aed601595a70AB815c96711a31Bc65
-#  AVAX: 0.019335
-#  USDC (0x5425...): 293.28
+psilocli balance --chain 84532 --token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+#  BASE: 0.05
+#  USDC (0x036CbD...): 20.0
 
-# 4. Create the job — --coin resolves everything automatically
+# 4. Create the job — --coin resolves asset, currency, and chain automatically
 psilocli create-job \
   --title "Write a report" \
-  --amount 100 \
+  --amount 15 \
   --invite 0xSELLER_ADDRESS \
   --coin USDC \
+  --chain-id 84532 \
   --description "Produce a 2-page market analysis." \
   --deliverable "Send the finished report as a message attachment"
 ```
 
 What happens under the hood:
 
-1. `list coins` → finds USDC → sets `asset = 0x5425…`, `currency = coin._id`, `chainId = 43113`
+1. `--coin USDC` → `payment.fetchPaymentCoins()` → sets `asset`, `currency = coin._id`, `chainId`
 2. Invitee lookup (pre-flight, before any on-chain step):
    - `--invite <address>` → `user.getUserByWalletAddress(address)` → userId
    - `--invite-id <userId>` → `user.getUserById(userId)` (validates the ID exists)
@@ -204,8 +213,8 @@ What happens under the hood:
 4. `job.makeDeposit(jobId)` → server returns ERC-20 `approve` + `deposit` tx payloads
 5. Signs & broadcasts `approve` tx (grants escrow contract allowance) — ERC-20 only
 6. Signs & broadcasts `deposit` tx (moves funds into escrow)
-   - RPC URL is resolved via `payment.fetchAvailableChains()` — works for any available chain,
-     not just the server's currently-active one
+   - RPC URL resolved via `payment.fetchAvailableChains()` → `chain.publicRpcUrls[0]`
+   - Override with `--rpc <url>` if the server's endpoint is rate-limited
 7. `job.validatePayment(jobId)` → polls up to 6×10s until on-chain confirmation
 8. `job.inviteTalent(jobId)` → signs `onInvite` tx → `job.confirmTx(jobId, { step: 'onInvite' })`
 
@@ -222,12 +231,18 @@ signs and confirms (`create-job`: approve/deposit + invite;
 
 ## Supported chains
 
-| Chain ID | Network                |
-| -------- | ---------------------- |
-| `43113`  | Avalanche Fuji testnet |
-| `43114`  | Avalanche mainnet      |
+Chains are resolved dynamically from the server (`GET /v1/payment/chains`). Run:
 
-Add more in `src/chains.js` → `RPC_URLS` / `NATIVE_SYMBOLS`.
+```sh
+psilocli list chains
+```
+
+to see every available chain and which one is the default. As of this writing the
+default is **Base Sepolia (84532)**; it is server-controlled and can change. There
+are no hardcoded chain IDs or RPC URLs in the CLI — all are sourced from
+`payment.fetchAvailableChains()` at runtime. Override the RPC endpoint for any
+signing command with `--rpc <url>` if the server's `publicRpcUrls` entry is
+unavailable or rate-limited.
 
 ## Looking for the daemon?
 
