@@ -1,10 +1,10 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
-import { fetchAvailableChains } from '../chains.js'
+import { fetchAvailableChains, resolveAssetSymbol } from '../chains.js'
 import { out, print, fail, cliTable } from '../output.js'
 
 export const usage =
-  'psilocli list jobs [--status <s>] [--limit <n>] [--role <r>]\n' +
+  'psilocli list jobs [--status <s>] [--limit <n>] [--role <r>] [--owner]\n' +
   'psilocli list invites\n' +
   'psilocli list users [--search <text>] [--tags <t>] [--username <s>] [--role <r>] [--limit <n>] [--page <n>]\n' +
   'psilocli list chains\n' +
@@ -18,17 +18,21 @@ export async function run(argv) {
       status: { type: 'string' },
       limit: { type: 'string' },
       role: { type: 'string' },
+      owner: { type: 'boolean' },
     })
     const config = resolveConfig(values)
     const { sdk } = await cliInit(config)
     const role = values.role ?? 'buyer'
     if (!values.role)
       process.stderr.write('note: defaulting to --role buyer. Pass --role seller to see seller jobs.\n')
+    if (!values.owner)
+      process.stderr.write('note: showing the public job board, not just your own jobs. Pass --owner to scope to jobs you\'re a party to.\n')
     const listOpts = {
       status: values.status ?? 'open',
       limit: parseInt(values.limit ?? '20', 10),
       role,
     }
+    if (values.owner) listOpts.owner = true
     const result = sdkOk(await sdk.job.list(listOpts), 'job.list')
     const jobs = result?.data ?? (Array.isArray(result) ? result : [])
     if (config.json) {
@@ -36,13 +40,18 @@ export async function run(argv) {
     } else if (jobs.length === 0) {
       print('No jobs found.')
     } else {
+      const [allCoins, chains] = await Promise.all([
+        sdkOk(await sdk.payment.fetchPaymentCoins(), 'payment.fetchPaymentCoins'),
+        fetchAvailableChains(sdk),
+      ])
+      const coins = (Array.isArray(allCoins) ? allCoins : []).filter((c) => c.active)
       cliTable(
         jobs.map((j) => [
           String(j._id).slice(-8),
           (j.title ?? '').slice(0, 40),
           j.status ?? '',
           String(j.amount ?? ''),
-          j.currency?.symbol ?? 'AVAX',
+          j.currency?.symbol ?? resolveAssetSymbol(coins, chains, j),
         ]),
         ['ID', 'Title', 'Status', 'Amount', 'Token'],
       )

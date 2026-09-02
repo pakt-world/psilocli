@@ -53,7 +53,8 @@ psilocli whoami
 psilocli balance --chain 84532 --token 0xTOKEN
 
 # Jobs
-psilocli list jobs --status open --limit 20 --role buyer
+psilocli list jobs --status open --limit 20 --role buyer          # public job board
+psilocli list jobs --status open --limit 20 --role buyer --owner  # only your own jobs
 psilocli list invites
 psilocli list users --search "Gabriel"
 psilocli apply <jobId> --cover-letter "I can deliver this."
@@ -83,6 +84,7 @@ psilocli accept-invite <jobId> <inviteId>
 psilocli decline-invite <jobId> <inviteId>
 psilocli complete-job <jobId> --content "Here is the finished report: ..."
 psilocli complete-job <jobId> --content-file ./report.md
+# accept-invite and complete-job sign transactions too — both take --rpc <url> (see below)
 
 # Cancel flow — either the buyer or the seller can initiate
 psilocli cancel-job <jobId> --reason "Project scope changed" --explanation "Client pivoted"
@@ -93,6 +95,7 @@ psilocli decline-cancel <jobId> --resolution "Work is in progress"  # → job co
 # Buyer: release escrow, then review
 psilocli release-payment <jobId>
 psilocli review <jobId> --receiver <userId> --rating 5 --text "Great work"
+# release-payment signs a tx too — also takes --rpc <url> (see below)
 
 # Reviews received
 psilocli reviews me
@@ -104,8 +107,13 @@ psilocli create-job --resume <jobId> --invite 0xSELLER_ADDRESS
 psilocli create-job --resume <jobId> --invite-id <userId>
 
 # Override the RPC endpoint (useful when the server's publicRpcUrl is rate-limited)
+# --rpc works on every command that signs a transaction: create-job, accept-invite,
+# complete-job, and release-payment.
 psilocli create-job ... --rpc https://sepolia.base.org
 psilocli create-job --resume <jobId> --invite 0xSELLER --rpc https://sepolia.base.org
+psilocli accept-invite <jobId> <inviteId> --rpc https://sepolia.base.org
+psilocli complete-job <jobId> --content "..." --rpc https://sepolia.base.org
+psilocli release-payment <jobId> --rpc https://sepolia.base.org
 
 # Messaging
 psilocli messages list

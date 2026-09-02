@@ -75,6 +75,29 @@ export async function signAndBroadcast(sdk, key, txPayload, rpcOverride = null) 
   return receipt.hash
 }
 
+// Resolves a job's display symbol from its on-chain asset address, since
+// `job.currency` is frequently null even when `asset` is populated. Matches
+// asset against each active coin's per-chain contract address first, then
+// falls back to matching the address against any chain (some job records
+// carry a contract address registered under a different chainId). An empty
+// asset means the job is funded in the chain's native token.
+export function resolveAssetSymbol(coins, chains, { asset, chainId }) {
+  const addr = (asset ?? '').toLowerCase()
+  if (!addr) {
+    const chain = chains.find(c => String(c.chainId) === String(chainId))
+    return chain?.nativeCurrency?.symbol ?? '?'
+  }
+  const exact = coins.find(
+    c => (c.contractAddresses?.[String(chainId)] ?? '').toLowerCase() === addr,
+  )
+  if (exact) return exact.symbol
+  const loose = coins.find(c =>
+    Object.values(c.contractAddresses ?? {}).some(a => a.toLowerCase() === addr),
+  )
+  if (loose) return loose.symbol
+  return `${asset.slice(0, 6)}…${asset.slice(-4)}`
+}
+
 // Reads ERC-20 balance, symbol and decimals directly from the token contract.
 export async function readTokenBalance(sdk, contractAddress, chainId, address) {
   const rpcUrl = await resolveRpcUrl(sdk, chainId)

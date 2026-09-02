@@ -6,7 +6,7 @@ import { withMessaging, wsRequest, sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
 export const usage =
-  'psilocli complete-job <jobId> [--content <text> | --content-file <path>]'
+  'psilocli complete-job <jobId> [--content <text> | --content-file <path>] [--rpc <url>]'
 
 // A deliverable whose title/description asks the seller to message the buyer.
 function isMessagingDeliverable(deliverable) {
@@ -45,6 +45,7 @@ export async function run(argv) {
     {
       content: { type: 'string' },
       'content-file': { type: 'string' },
+      rpc: { type: 'string' },
     },
     { positionals: true },
   )
@@ -130,7 +131,7 @@ export async function run(argv) {
   const { markReadyPayload } = completeData
   if (markReadyPayload) {
     note(`Signing markReady tx for chain ${markReadyPayload.chainId}...`)
-    txHash = await signAndBroadcast(sdk, config.key, markReadyPayload)
+    txHash = await signAndBroadcast(sdk, config.key, markReadyPayload, values.rpc ?? null)
     note(`markReady broadcast — txHash: ${txHash} — confirming with API...`)
 
     let confirmed = false

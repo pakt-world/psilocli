@@ -3,10 +3,10 @@ import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast } from '../chains.js'
 import { out, print, fail } from '../output.js'
 
-export const usage = 'psilocli accept-invite <jobId> <inviteId>'
+export const usage = 'psilocli accept-invite <jobId> <inviteId> [--rpc <url>]'
 
 export async function run(argv) {
-  const { values, positionals } = parseCommand(argv, {}, { positionals: true })
+  const { values, positionals } = parseCommand(argv, { rpc: { type: 'string' } }, { positionals: true })
   const [jobId, inviteId] = positionals
   if (!jobId || !inviteId) fail(`Usage: ${usage}`, 2)
 
@@ -19,7 +19,7 @@ export async function run(argv) {
   let txHash = null
   if (acceptData?.acceptPayload) {
     try {
-      txHash = await signAndBroadcast(sdk, config.key, acceptData.acceptPayload)
+      txHash = await signAndBroadcast(sdk, config.key, acceptData.acceptPayload, values.rpc ?? null)
     } catch (err) {
       const msg = err.message ?? ''
       if (msg.includes('transfer amount exceeds balance') || msg.includes('insufficient funds'))
