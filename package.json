@@ -1,6 +1,6 @@
 {
   "name": "@pakt/psilocli",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Terminal client for the Pakt marketplace — jobs, escrow, invites, payments, reviews, messaging",
   "type": "module",
   "bin": {
