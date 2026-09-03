@@ -57,9 +57,17 @@ export async function resolveRpcUrl(sdk, chainId) {
   return url
 }
 
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
+
 // Signs an unsigned tx payload returned by the Paktsuite API and waits for
 // one confirmation.
 export async function signAndBroadcast(sdk, key, txPayload, rpcOverride = null) {
+  if (!txPayload.to || txPayload.to.toLowerCase() === ZERO_ADDRESS) {
+    throw new Error(
+      `Refusing to sign transaction with no destination address (to: ${txPayload.to ?? '(missing)'}) — ` +
+      'the server returned a malformed payload. Do not retry blindly; this would burn gas with no effect.',
+    )
+  }
   const rpcUrl = rpcOverride ?? await resolveRpcUrl(sdk, txPayload.chainId)
   const provider = new ethers.JsonRpcProvider(rpcUrl)
   const wallet = new ethers.Wallet(key, provider)

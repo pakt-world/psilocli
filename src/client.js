@@ -2,12 +2,12 @@ import { PsiloSDK } from '@pakt/psilo'
 
 // Unwraps the SDK's ResponseDto envelope; throws with context on error status.
 export function sdkOk(result, label) {
-  if (!result || result.status === 'error' || !result.data) {
+  if (!result || result.status === 'error') {
     throw new Error(
       `${label} failed: ${JSON.stringify(result?.message ?? result)}`,
     )
   }
-  return result.data
+  return result.data ?? result
 }
 
 export function decodeUserId(token) {
