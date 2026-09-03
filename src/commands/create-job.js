@@ -272,7 +272,6 @@ export async function run(argv) {
         'Run "psilocli list coins" to see available options.',
         2,
       )
-    asset    = coin.isToken ? (coin.contractAddress ?? '') : ''
     currency = coin._id
     if (!chainId) {
       chainId = String((coin.rpcChainIds ?? [])[0] ?? '')
@@ -280,6 +279,7 @@ export async function run(argv) {
       note(`WARNING: --chain-id ${chainId} not in ${coin.symbol} chains (${(coin.rpcChainIds ?? []).join(', ')}). Using coin's first chain.`)
       chainId = String((coin.rpcChainIds ?? [])[0] ?? '')
     }
+    asset = coin.isToken ? (coin.contractAddresses?.[chainId] ?? coin.contractAddress ?? '') : ''
     note(`Coin: ${coin.name} (${coin.symbol})${coin.isToken ? ` — contract ${asset}` : ' — native'}`)
   }
 
