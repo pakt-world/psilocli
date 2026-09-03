@@ -14,7 +14,7 @@ state.
 │                                                        │
 │  PsiloSDK (REST)   ←→  Paktsuite API                   │
 │  MessagingService  ←→  Paktsuite WS (messages … only)  │
-│  ethers.js         ←→  EVM chain (Avalanche)           │
+│  ethers.js         ←→  EVM chain (multi-chain, dynamic)  │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -68,7 +68,7 @@ sdk.payment.fetchPaymentCoins({ rpcId? })   GET /v1/payment/coins   (public — 
 | `rpcServerId`  | ID of the backing RPC server record (pass as `rpcId` to `fetchPaymentCoins`) |
 | `chainId`      | EVM chain ID (string)                                        |
 | `name`         | Human-readable chain name                                    |
-| `rpcUrls`      | RPC endpoints for signing transactions                       |
+| `publicRpcUrls` | RPC endpoints for signing transactions (used by `resolveRpc`) |
 | `nativeCurrency` | `{ name, symbol, decimals }`                               |
 | `isDefault`    | True for the chain used when no `chainId` is sent            |
 | `factoryAddress` | Escrow factory contract address                            |
@@ -77,14 +77,15 @@ sdk.payment.fetchPaymentCoins({ rpcId? })   GET /v1/payment/coins   (public — 
 
 `fetchPaymentCoins()` returns `PaymentCoin[]`. Each record has:
 
-| Field             | Meaning                                              |
-| ----------------- | ---------------------------------------------------- |
-| `_id`             | The ID the server expects in `CreateJobDto.currency` |
-| `symbol`          | Human-readable ticker (e.g. `USDC`, `AVAX`)          |
-| `contractAddress` | ERC-20 address; absent on native coins               |
-| `isToken`         | `true` = ERC-20, `false` = native coin               |
-| `rpcChainId`      | Chain this coin lives on                             |
-| `active`          | Only active coins are usable                         |
+| Field               | Meaning                                              |
+| ------------------- | ---------------------------------------------------- |
+| `_id`               | The ID the server expects in `CreateJobDto.currency` |
+| `symbol`            | Human-readable ticker (e.g. `USDC`, `AVAX`)          |
+| `contractAddress`   | ERC-20 address on the coin's `resolvedChainId`; absent on native coins |
+| `contractAddresses` | Map of `{ chainId: contractAddress }` across every chain the coin is deployed on — used by `resolveAssetSymbol` (see below) to look up a job's token from its `asset` field |
+| `isToken`           | `true` = ERC-20, `false` = native coin               |
+| `rpcChainIds`       | Array of chain IDs this coin is active on (strings)  |
+| `active`            | Only active coins are usable                         |
 
 ### `--coin <symbol>` resolution in `create-job`
 
@@ -94,10 +95,65 @@ auto-resolves three fields so you don't have to look them up manually:
 1. Fetches all active coins, finds one whose `symbol` matches (case-insensitive).
 2. Sets `asset = coin.contractAddress` for ERC-20 tokens, `''` for native coins.
 3. Sets `currency = coin._id` — **the server stores the coin record's `_id`, not the symbol**.
-4. Sets `chainId = String(coin.rpcChainId)` unless `--chain-id` overrides it.
+4. Sets `chainId = coin.rpcChainIds[0]` unless `--chain-id` overrides it
+   (and warns if `--chain-id` is not in `coin.rpcChainIds`).
 
 If neither `--coin` nor `--chain-id` nor `JOB_CHAIN_ID` is set, `create-job`
-calls `fetchActiveRpc()` to read the server's currently active chain.
+calls `resolveRpc(sdk, null)` which picks the `isDefault` chain from
+`fetchAvailableChains()`.
+
+## Job listing (`sdk.job.list`)
+
+```sh
+psilocli list jobs --status open --limit 20 --role buyer            # public job board
+psilocli list jobs --status open --limit 20 --role buyer --owner    # only jobs you're a party to
+```
+
+`GET /v1/job` is a **public job board** — without `--owner`, it returns every
+job matching `status`/`limit` regardless of who created it, and `role` has no
+effect (role is only meaningful relative to *your own* jobs). Passing
+`--owner` sends `owner=true` and correctly scopes the result to jobs where
+the caller is the `role` given (`buyer` → jobs you created, `seller` → jobs
+you're working). This was confirmed by direct testing (PSILO-1/PSILO-2 in
+the bug tracker were filed against the public-board behavior; both closed as
+"working as intended" once `--owner` was identified as the missing param).
+
+Field availability differs by mode:
+- Public board (no `--owner`): sensitive fields (`buyer`, `seller`,
+  `escrowAddress`, `escrowStatus`, `owner`, `asset`) are stripped from the
+  response. `isPrivate: true` jobs are excluded entirely.
+- Owner-scoped (`--owner`): full record, including `asset`, `buyer`/`seller`
+  wallet addresses, and escrow fields.
+
+### Token column resolution
+
+`job.currency` (the populated coin object) is frequently `null` even when
+`job.asset` (the raw ERC-20 contract address) is present — this affects a
+known batch of jobs created between **2026-07-02 and 2026-07-20**; every job
+sampled outside that window resolves `currency` correctly, so treat it as
+legacy data, not a live bug, and don't re-investigate unless a *newly
+created* job reproduces it.
+
+Because of that gap, `list jobs`' Token column doesn't trust `currency`
+alone — `resolveAssetSymbol(coins, chains, job)` in `src/chains.js` resolves
+it from `job.asset` + `job.chainId` instead:
+
+1. If `job.currency.symbol` is present, use it directly.
+2. Else match `job.asset` against `coins[].contractAddresses[job.chainId]`
+   (exact chain match).
+3. Else match `job.asset` against `contractAddresses` on *any* chain (loose
+   match — a small number of historical records have their contract address
+   registered under the wrong chainId key).
+4. Else, if `job.asset` is empty, the job is funded in the chain's native
+   token — resolve `chain.nativeCurrency.symbol` from `fetchAvailableChains()`.
+5. Else, fall back to a truncated `asset` address rather than guessing a
+   symbol (the old code hardcoded `'AVAX'` here, which was wrong ~95% of the
+   time on sampled data — never reintroduce that fallback).
+
+Note this can only resolve what the API gives it: on the public board,
+`asset` is `null` on every record, so the Token column can still show the
+wrong thing there (falls through to the native-currency branch). Only
+`--owner` results carry enough data to resolve correctly.
 
 ## Job lifecycle and SDK calls
 
@@ -105,8 +161,9 @@ calls `fetchActiveRpc()` to read the server's currently active chain.
 Buyer                                Seller
 ─────────────────────────────────────────────────────────────────────
 Pre-flight (optional):
-  list chains  → sdk.payment.fetchActiveRpc()
+  list chains  → sdk.payment.fetchAvailableChains()
   list coins   → sdk.payment.fetchPaymentCoins()
+  list jobs    → sdk.job.list({ status, limit, role, owner? })   (public board unless owner:true)
 
 create-job:
   sdk.payment.fetchPaymentCoins()       (when --coin is used)
@@ -227,7 +284,7 @@ Both paths run before `job.create` so a bad invitee fails fast with no on-chain 
   "title":        "--title",
   "description":  "--description or JOB_DESCRIPTION",
   "amount":       "--amount (string, e.g. '100')",
-  "chainId":      "resolved: --chain-id > --coin.rpcChainId > JOB_CHAIN_ID > active RPC",
+  "chainId":      "resolved: --chain-id > --coin.rpcChainIds[0] > JOB_CHAIN_ID > resolveRpc(sdk, null)",
   "currency":     "coin._id  (set by --coin)  OR  raw --currency value",
   "asset":        "coin.contractAddress for ERC-20; omitted for native coins",
   "deliverables": [{ "name": "..." }]
@@ -236,16 +293,16 @@ Both paths run before `job.create` so a bad invitee fails fast with no on-chain 
 
 ## Chain / transaction signing
 
-`src/chains.js` → `signAndBroadcast(sdk, key, txPayload)`:
+`src/chains.js` → `signAndBroadcast(sdk, key, txPayload, rpcOverride = null)`:
 
-- Resolves the RPC via `resolveRpc(sdk, chainId)`: calls the server's
-  `sdk.payment.fetchActiveRpc()` (public, no auth) and uses its `rpcUrls[0]`
-  when `rpcChainId` matches. That endpoint only ever describes the one chain
-  the server currently has active, so a small `FALLBACK_RPC_URLS`/
-  `FALLBACK_NATIVE_SYMBOLS` map in `chains.js` covers chains a job might still
-  need signing for (43113 Fuji, 43114 Avalanche mainnet, 84532 Base Sepolia)
-  when the active chain doesn't match — extend that map for new chains, but
-  prefer the server's answer whenever it applies.
+- Resolves the RPC via `resolveRpc(sdk, chainId)`: calls
+  `fetchAvailableChains()` and returns `chain.publicRpcUrls[0]` for the
+  matched chain (or the `isDefault` chain when no `chainId` is given). No
+  hardcoded fallback URLs — all RPC endpoints are server-sourced.
+- Pass `rpcOverride` (from `--rpc <url>`) to bypass the server-provided URL.
+  Useful when `publicRpcUrls[0]` is rate-limited (e.g. Tenderly free tier).
+  Every command that calls `signAndBroadcast` exposes `--rpc`: `create-job`
+  (incl. `--resume`), `accept-invite`, `complete-job`, `release-payment`.
 - Signs with `ethers.Wallet`, sends, and **waits one confirmation**
   (`tx.wait()`), so callers never need blind sleeps after it returns.
 - API tx payloads are unsigned `{ to, data, value, gas, maxFeePerGas,
@@ -349,7 +406,7 @@ flags are never sent so the API treats them as no-ops.
 | `JOB_AMOUNT`           | `--amount`        | Default `'1'`                                       |
 | `JOB_COIN`             | `--coin`          | Symbol e.g. `USDC` — resolves asset + currency automatically |
 | `JOB_CURRENCY`         | `--currency`      | Raw coin `_id` override; prefer `JOB_COIN`          |
-| `JOB_CHAIN_ID`         | `--chain-id`      | Explicit chain; if unset, fetched from active RPC   |
+| `JOB_CHAIN_ID`         | `--chain-id`      | Explicit chain; if unset, resolved from `fetchAvailableChains()` isDefault |
 | `JOB_ASSET`            | `--asset`         | Raw ERC-20 address override; prefer `JOB_COIN`      |
 | `JOB_DELIVERABLE`      | `--deliverable`   | Has a built-in default                              |
 
@@ -367,10 +424,12 @@ flags are never sent so the API treats them as no-ops.
 
 Export `AGENT_PRIVATE_KEY` and `AGENT_ADDRESS`, or pass `-k`/`-a`.
 
-### `No RPC URL configured for chain <id>`
+### `Chain <id> is not available on this server`
 
-The tx payload's `chainId` is missing or the chain isn't in
-`src/chains.js` → `RPC_URLS`. Add the chain or pass `--chain-id`.
+The requested `chainId` isn't in the server's `GET /v1/payment/chains`
+response, or `publicRpcUrls` is empty for that chain. Run
+`psilocli list chains --json` to see what the server currently exposes.
+Use `--rpc <url>` to supply an RPC endpoint directly if the server omits it.
 
 ### `validatePayment attempt n/6 failed`
 
@@ -381,7 +440,9 @@ fail, check the deposit tx hash on the explorer and re-run
 ### `No releasePayload returned — job may not be in review status`
 
 `release-payment` only works after the seller's `complete-job` confirmed
-`onMarkReady`. Check `psilocli list jobs --role buyer --status ongoing`.
+`onMarkReady`. Check `psilocli list jobs --role buyer --status ongoing --owner`
+(`--owner` is required — without it, the API returns the public job board,
+not just jobs you're a party to).
 
 ### `psilocli reviews <userId>` returns "No reviews yet" / count: 0
 

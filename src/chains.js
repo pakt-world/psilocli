@@ -35,7 +35,7 @@ export async function resolveRpc(sdk, chainId) {
     }
   }
 
-  const url = chain.rpcUrls?.[0]
+  const url = chain.publicRpcUrls?.[0]
   if (!url) {
     throw new Error(
       `Chain ${chain.chainId} (${chain.name ?? 'unknown'}) has no RPC URL configured on the server.`,
@@ -59,8 +59,8 @@ export async function resolveRpcUrl(sdk, chainId) {
 
 // Signs an unsigned tx payload returned by the Paktsuite API and waits for
 // one confirmation.
-export async function signAndBroadcast(sdk, key, txPayload) {
-  const rpcUrl = await resolveRpcUrl(sdk, txPayload.chainId)
+export async function signAndBroadcast(sdk, key, txPayload, rpcOverride = null) {
+  const rpcUrl = rpcOverride ?? await resolveRpcUrl(sdk, txPayload.chainId)
   const provider = new ethers.JsonRpcProvider(rpcUrl)
   const wallet = new ethers.Wallet(key, provider)
   const tx = await wallet.sendTransaction({
@@ -73,6 +73,29 @@ export async function signAndBroadcast(sdk, key, txPayload) {
   })
   const receipt = await tx.wait()
   return receipt.hash
+}
+
+// Resolves a job's display symbol from its on-chain asset address, since
+// `job.currency` is frequently null even when `asset` is populated. Matches
+// asset against each active coin's per-chain contract address first, then
+// falls back to matching the address against any chain (some job records
+// carry a contract address registered under a different chainId). An empty
+// asset means the job is funded in the chain's native token.
+export function resolveAssetSymbol(coins, chains, { asset, chainId }) {
+  const addr = (asset ?? '').toLowerCase()
+  if (!addr) {
+    const chain = chains.find(c => String(c.chainId) === String(chainId))
+    return chain?.nativeCurrency?.symbol ?? '?'
+  }
+  const exact = coins.find(
+    c => (c.contractAddresses?.[String(chainId)] ?? '').toLowerCase() === addr,
+  )
+  if (exact) return exact.symbol
+  const loose = coins.find(c =>
+    Object.values(c.contractAddresses ?? {}).some(a => a.toLowerCase() === addr),
+  )
+  if (loose) return loose.symbol
+  return `${asset.slice(0, 6)}…${asset.slice(-4)}`
 }
 
 // Reads ERC-20 balance, symbol and decimals directly from the token contract.

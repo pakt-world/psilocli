@@ -63,7 +63,8 @@ COMMANDS
   whoami                                                Show agent identity
   balance [--chain <id>] [--token <0x>]                 Wallet balance
   job <id>                                              Get a job by ID
-  list jobs [--status <s>] [--limit <n>] [--role <r>]   List jobs
+  list jobs [--status <s>] [--limit <n>] [--role <r>]   List jobs (public board;
+            [--owner]                                    add --owner for just yours)
   list invites                                          List received invites
   list users [--search <text>] [--tags <t>] [--limit <n>]  Search the user directory
   list chains                                           Show all chains where escrows can be created
@@ -74,16 +75,18 @@ COMMANDS
              (--invite <0x> | --invite-id <userId>)
              [--description <t>] [--deliverable <t> ...]
              [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]
+             [--rpc <url>]
   create-job --resume <jobId>                           Resume a crashed create-job flow
-             (--invite <0x> | --invite-id <userId>)
+             (--invite <0x> | --invite-id <userId>) [--rpc <url>]
   cancel-job <jobId> --reason <s> [--explanation <s>]   Request job cancellation
   delete-job <jobId>                                    Delete a job (e.g. unfunded/no counterparty)
   accept-cancel <jobId> [--resolution <s>]              Accept a cancel request
   decline-cancel <jobId> [--resolution <s>]             Decline a cancel request
-  accept-invite <jobId> <inviteId>                      Accept a job invite (signs tx)
+  accept-invite <jobId> <inviteId> [--rpc <url>]        Accept a job invite (signs tx)
   decline-invite <jobId> <inviteId>                     Decline a job invite
   complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job
-  release-payment <jobId>                               Release escrow to seller
+               [--rpc <url>]
+  release-payment <jobId> [--rpc <url>]                Release escrow to seller
   review <jobId> --receiver <userId> [--rating n] [--text t]  Submit a review
   reviews me [--limit <n>]                              View reviews received by you
   reviews <userId> [--limit <n>]                        View reviews received by a user
@@ -134,6 +137,7 @@ META
 EXAMPLES
   psilocli whoami
   psilocli list jobs --status open --json
+  psilocli list jobs --role seller --status ongoing --owner   # only jobs you're a party to
   psilocli apply 6650f0... --cover-letter "I can deliver this."
   psilocli create-job --title "Write a report" --amount 2 --invite 0xAGENT
   psilocli complete-job 6650f0... --content "Here is the finished report: ..."
