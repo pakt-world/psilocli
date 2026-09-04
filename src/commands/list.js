@@ -4,8 +4,8 @@ import { fetchAvailableChains, resolveAssetSymbol } from '../chains.js'
 import { out, print, fail, cliTable } from '../output.js'
 
 export const usage =
-  'psilocli list jobs [--status <s>] [--limit <n>] [--role <r>] [--owner]\n' +
-  'psilocli list invites\n' +
+  'psilocli list jobs [--status <s>] [--limit <n>] [--owner]\n' +
+  'psilocli list invites [--pending]\n' +
   'psilocli list users [--search <text>] [--tags <t>] [--username <s>] [--role <r>] [--limit <n>] [--page <n>]\n' +
   'psilocli list chains\n' +
   'psilocli list coins [--chain-id <n>]  (alias: list assets)'
@@ -17,22 +17,17 @@ export async function run(argv) {
     const { values } = parseCommand(argv.slice(1), {
       status: { type: 'string' },
       limit: { type: 'string' },
-      role: { type: 'string' },
       owner: { type: 'boolean' },
     })
     const config = resolveConfig(values)
-    const { sdk } = await cliInit(config)
-    const role = values.role ?? 'buyer'
-    if (!values.role)
-      process.stderr.write('note: defaulting to --role buyer. Pass --role seller to see seller jobs.\n')
+    const { sdk, userId } = await cliInit(config)
     if (!values.owner)
       process.stderr.write('note: showing the public job board, not just your own jobs. Pass --owner to scope to jobs you\'re a party to.\n')
     const listOpts = {
       status: values.status ?? 'open',
       limit: parseInt(values.limit ?? '20', 10),
-      role,
     }
-    if (values.owner) listOpts.owner = true
+    if (values.owner) listOpts.creator = userId
     const result = sdkOk(await sdk.job.list(listOpts), 'job.list')
     const jobs = result?.data ?? (Array.isArray(result) ? result : [])
     if (config.json) {
@@ -60,15 +55,28 @@ export async function run(argv) {
   }
 
   if (sub === 'invites') {
-    const { values } = parseCommand(argv.slice(1))
+    const { values } = parseCommand(argv.slice(1), {
+      pending: { type: 'boolean' },
+    })
     const config = resolveConfig(values)
     const { sdk } = await cliInit(config)
     const { data: inviteList } = await sdk.job.listAllInvites()
-    const invites = inviteList?.data ?? []
+    let invites = inviteList?.data ?? []
+    // No server-side status filter exists (ListAllInvitesQuery is page/limit
+    // only) — this is a client-side filter over the same full list, not a
+    // narrower query. An invite can still flip status between this call and
+    // a later accept-invite call; this doesn't close that race.
+    if (values.pending) {
+      invites = invites.filter((i) => i.status === 'pending')
+    } else {
+      process.stderr.write(
+        'note: showing invites of every status. Pass --pending to see only ones still awaiting action.\n',
+      )
+    }
     if (config.json) {
       out(invites)
     } else if (invites.length === 0) {
-      print('No invites found.')
+      print(values.pending ? 'No pending invites found.' : 'No invites found.')
     } else {
       cliTable(
         invites.map((i) => [

@@ -6,7 +6,7 @@ import { out, print, note, fail } from '../output.js'
 
 export const usage =
   'psilocli create-job --title <t> --amount <n> [--invite <0x> | --invite-id <userId>] [--description <t>]\n' +
-  '                    [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]\n' +
+  '                    [--coin <symbol>] [--currency <s>] [--chain-id <id>]\n' +
   '                    [--deliverable <t> ...] [--rpc <url>]\n' +
   'psilocli create-job --resume <jobId> [--invite <0x> | --invite-id <userId>] [--rpc <url>]  Resume a crashed create-job flow'
 
@@ -18,7 +18,6 @@ const DEFAULTS = {
   coin:        process.env.JOB_COIN        ?? '',
   currency:    process.env.JOB_CURRENCY    ?? '',
   chainId:     process.env.JOB_CHAIN_ID    ?? '',   // empty → query server active RPC
-  asset:       process.env.JOB_ASSET       ?? '',
   deliverable:
     process.env.JOB_DELIVERABLE ??
     'Send the buyer a message confirming job acceptance and your readiness to deliver.',
@@ -227,7 +226,6 @@ export async function run(argv) {
     coin:         { type: 'string' },
     currency:     { type: 'string' },
     'chain-id':   { type: 'string' },
-    asset:        { type: 'string' },
     deliverable:  { type: 'string', multiple: true },
     invite:       { type: 'string' },
     'invite-id':  { type: 'string' },
@@ -256,7 +254,10 @@ export async function run(argv) {
   const { sdk } = await cliInit(config)
 
   // --- resolve coin → asset + currency + chainId ---
-  let asset    = values.asset    ?? DEFAULTS.asset
+  // asset can only come from --coin below — there's no raw override, so it's
+  // never at odds with the coin lookup (see PSILO-6).
+  const amount = values.amount ?? DEFAULTS.amount
+  let asset    = ''
   let currency = values.currency ?? DEFAULTS.currency
   let chainId  = values['chain-id'] || null
 
@@ -270,6 +271,15 @@ export async function run(argv) {
       fail(
         `Coin "${coinSymbol}" not found or inactive.\n` +
         'Run "psilocli list coins" to see available options.',
+        2,
+      )
+    // Validate before job.create() — the server only enforces this later, in
+    // makeDeposit, by which point the (unfunded) job record already exists
+    // and has to be cleaned up with delete-job (see PSILO-8).
+    if (coin.minAmount != null && Number(amount) < Number(coin.minAmount))
+      fail(
+        `Amount ${amount} is below ${coin.symbol}'s minimum of ${coin.minAmount}.\n` +
+        'Run "psilocli list coins --json" to check minimums before creating a job.',
         2,
       )
     currency = coin._id
@@ -298,7 +308,7 @@ export async function run(argv) {
   const result = await createJobAndInvite(sdk, config, inviteeAddress, {
     title:       values.title,
     description: values.description ?? DEFAULTS.description,
-    amount:      values.amount      ?? DEFAULTS.amount,
+    amount,
     currency,
     chainId,
     asset,
