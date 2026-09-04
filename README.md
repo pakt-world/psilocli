@@ -37,7 +37,6 @@ export JOB_DESCRIPTION="..."     # default job description
 export JOB_AMOUNT=1              # default escrow amount
 export JOB_CHAIN_ID=43113        # explicit chain ID (omit to use server's active chain)
 export JOB_CURRENCY=<coinId>     # raw coin _id override (use JOB_COIN instead)
-export JOB_ASSET=0x...           # raw ERC-20 contract address override (use JOB_COIN instead)
 export JOB_DELIVERABLE="..."     # default single deliverable name
 export INVITE_AGENT_ADDRESS=0x...  # default invitee wallet address (--invite-id <userId> to invite by user ID instead)
 ```
@@ -53,9 +52,10 @@ psilocli whoami
 psilocli balance --chain 84532 --token 0xTOKEN
 
 # Jobs
-psilocli list jobs --status open --limit 20 --role buyer          # public job board
-psilocli list jobs --status open --limit 20 --role buyer --owner  # only your own jobs
-psilocli list invites
+psilocli list jobs --status open --limit 20           # public job board
+psilocli list jobs --status open --limit 20 --owner    # only jobs you created
+psilocli list invites            # every invite regardless of status (accepted/cancelled included)
+psilocli list invites --pending  # client-side filter to status === "pending" only
 psilocli list users --search "Gabriel"
 psilocli apply <jobId> --cover-letter "I can deliver this."
 echo "cover letter from a file" | psilocli apply <jobId> --cover-letter -
@@ -68,6 +68,8 @@ psilocli list assets --chain-id 84532       # alias for list coins
 
 # Buyer flow: create job → fund escrow on-chain → invite talent
 # Recommended: --coin auto-resolves chain, asset, and currency
+# Each coin has its own minimum amount (USDC: 10) — check with `list coins --json`;
+# --amount below the minimum is rejected immediately, before any job is created
 psilocli create-job --title "Write a report" --amount 100 --invite 0xAGENT --coin USDC
 
 # Invite by user ID instead of wallet address
@@ -80,7 +82,7 @@ psilocli create-job --title "My Job" --amount 50 --invite 0xAGENT \
   --deliverable "Send confirmation message"
 
 # Seller flow
-psilocli accept-invite <jobId> <inviteId>
+psilocli accept-invite <jobId> <inviteId>  # pre-flights the invite's status; fails fast if already resolved
 psilocli decline-invite <jobId> <inviteId>
 psilocli complete-job <jobId> --content "Here is the finished report: ..."
 psilocli complete-job <jobId> --content-file ./report.md
@@ -213,7 +215,7 @@ psilocli create-job \
 
 What happens under the hood:
 
-1. `--coin USDC` → `payment.fetchPaymentCoins()` → sets `asset`, `currency = coin._id`, `chainId`
+1. `--coin USDC` → `payment.fetchPaymentCoins()` → sets `currency = coin._id`, resolves `chainId`, then resolves `asset` for that specific chain (see SKILL.md for why order matters here)
 2. Invitee lookup (pre-flight, before any on-chain step):
    - `--invite <address>` → `user.getUserByWalletAddress(address)` → userId
    - `--invite-id <userId>` → `user.getUserById(userId)` (validates the ID exists)

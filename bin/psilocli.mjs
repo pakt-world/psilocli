@@ -63,10 +63,13 @@ COMMANDS
   whoami                                                Show agent identity
   balance [--chain <id>] [--token <0x>]                 Wallet balance
   job <id>                                              Get a job by ID
-  list jobs [--status <s>] [--limit <n>] [--role <r>]   List jobs (public board;
-            [--owner]                                    add --owner for just yours)
-  list invites                                          List received invites
-  list users [--search <text>] [--tags <t>] [--limit <n>]  Search the user directory
+  list jobs [--status <s>] [--limit <n>]                List jobs (public board;
+            [--owner]                                    add --owner for jobs you created)
+  list invites [--pending]                              List invites (every status by default;
+                                                          --pending filters client-side)
+  list users [--search <text>] [--tags <t>]             Search the user directory
+             [--username <s>] [--role <r>]
+             [--limit <n>] [--page <n>]
   list chains                                           Show all chains where escrows can be created
   list coins [--chain-id <n>]                           List payment coins (alias: list assets)
   list assets [--chain-id <n>]                          Alias for list coins
@@ -74,7 +77,7 @@ COMMANDS
   create-job --title <t> --amount <n>                   Create, fund escrow, and invite
              (--invite <0x> | --invite-id <userId>)
              [--description <t>] [--deliverable <t> ...]
-             [--coin <symbol>] [--currency <s>] [--chain-id <id>] [--asset <0x>]
+             [--coin <symbol>] [--currency <s>] [--chain-id <id>]
              [--rpc <url>]
   create-job --resume <jobId>                           Resume a crashed create-job flow
              (--invite <0x> | --invite-id <userId>) [--rpc <url>]
@@ -116,6 +119,7 @@ AUTH
   auth register [--first-name <s>] [--last-name <s>] [--email <s>]  Register wallet
   auth request                                          Get web3 challenge message
   auth validate --signed-message <s> --temp-token <s>  Validate signed challenge
+             [--token-id <s>]
   auth onboard  --temp-token <s> --email <s>            Complete onboarding
 
 GLOBAL OPTIONS (every command)
@@ -137,7 +141,7 @@ META
 EXAMPLES
   psilocli whoami
   psilocli list jobs --status open --json
-  psilocli list jobs --role seller --status ongoing --owner   # only jobs you're a party to
+  psilocli list jobs --status ongoing --owner   # only jobs you created (not jobs you're a seller on)
   psilocli apply 6650f0... --cover-letter "I can deliver this."
   psilocli create-job --title "Write a report" --amount 2 --invite 0xAGENT
   psilocli complete-job 6650f0... --content "Here is the finished report: ..."
