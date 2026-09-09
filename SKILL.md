@@ -92,22 +92,31 @@ sdk.payment.fetchPaymentCoins({ rpcId? })   GET /v1/payment/coins   (public — 
 
 `--coin` (or `JOB_COIN` env var) is the preferred way to specify payment. It
 auto-resolves three fields so you don't have to look them up manually. Order
-below matches `create-job.js:265-294` exactly — keep this list and that code
-in sync if either changes:
+below matches the coin block in `create-job.js` — keep this list and that
+code in sync if either changes:
 
-1. (`create-job.js:266-269`) Fetches all active coins via `fetchPaymentCoins()` (no chain
-   filter), finds one whose `symbol` matches (case-insensitive).
-2. (`create-job.js:279-284`) Validates `amount >= coin.minAmount` — see "Minimum
+1. Fetches active coins via `fetchPaymentCoins({ chainId })` when `--chain-id`
+   was given (no chain filter otherwise), finds one whose `symbol` matches
+   (case-insensitive). Passing the chain matters: without it the server
+   answers for its *default* chain, and the flat `contractAddress` in the
+   record (and the "Coin: … contract 0x…" note) belongs to that chain, not
+   the job's. Seen live 2026-09-09: a Fuji job printed the Base Sepolia
+   address while transacting the Fuji one.
+2. Validates `amount >= coin.minAmount` — see "Minimum
    escrow amount" below. Fails with a usage error (exit 2) before anything
    else runs if it's too low.
-3. (`create-job.js:285`) Sets `currency = coin._id` — **the server stores the coin
+3. Sets `currency = coin._id` — **the server stores the coin
    record's `_id`, not the symbol**.
-4. (`create-job.js:286-290`) Resolves `chainId`: `--chain-id` if given (warns and
-   falls back to `coin.rpcChainIds[0]` if that chain isn't in `coin.rpcChainIds`),
-   else `coin.rpcChainIds[0]`.
-5. (`create-job.js:292`) Sets `asset = coin.contractAddresses?.[chainId] ?? coin.contractAddress
-   ?? ''` for ERC-20 tokens, `''` for native coins — looked up against the
-   chainId resolved in step 4, **not** the flat `contractAddress` field alone.
+4. Resolves `chainId`: `--chain-id` if given — and **fails with exit 2 if that
+   chain isn't in `coin.rpcChainIds`** (it used to warn and silently switch
+   to `rpcChainIds[0]`, funding the escrow on a chain you didn't ask for) —
+   else the server's `resolvedChainId`, else `coin.rpcChainIds[0]`.
+5. Sets `asset = coin.contractAddresses[chainId]` for ERC-20 tokens (falling
+   back to the flat `contractAddress` only when the server confirms it was
+   resolved for that same chain), `''` for native coins. A token coin with no
+   address on the chosen chain is a usage error, never `''` — the server
+   would turn an empty asset into the zero address and treat the job as
+   native.
    Fixed 2026-09-03 (commit `c84a683`): the flat `contractAddress` reflects
    whatever chain the chain-less `fetchPaymentCoins()` call defaults to
    server-side (observed: Base Sepolia, 84532), so using it unconditionally
@@ -127,7 +136,10 @@ had to be cleaned up with `delete-job`, and the minimum itself appeared
 nowhere in `--help`, README, or here.
 
 Fixed by validating `amount >= coin.minAmount` immediately after resolving
-the coin (`create-job.js:279-284`), before `job.create()` is ever called.
+the coin, before `job.create()` is ever called. Since paktsuite-v2 PR
+"fix(job): refund on cancel + chain-aware creation" the server enforces the
+same minimum (and the coin/chain match) in `POST /v1/job` before writing the
+row, so even a raw `--currency` call no longer leaves a dangling job.
 Verified live: `--amount 5 --coin USDC` now fails immediately with `Amount 5
 is below USDC's minimum of 10.` and exit code 2 — no job record created, no
 `delete-job` cleanup needed. The boundary is inclusive: `--amount 10` (or
@@ -305,23 +317,21 @@ it was in before the request.
 
 ### Invite listing and acceptance
 
-`list invites` returns **every** invite regardless of status —
-`sdk.job.listAllInvites()`'s query type (`ListAllInvitesQuery`) is `{ page?,
-limit? }` only, no `status` field exists server-side to filter on. An
-account with any history will see `pending`, `accepted`, `cancelled`, etc.
-all mixed together (confirmed live 2026-09-04: 20 invites, only 7 pending).
-This bit a real agent (PSILO-7): it treated the full list as its open work
-and re-accepted a job it already held.
+`list invites` filters **server-side**: `GET /v1/job/invites` accepts
+`status=pending|accepted|declined|cancelled` and `direction=sent|received`
+(the status filter has existed server-side since 2026-09-01; the CLI simply
+never sent it). The CLI now defaults to `status=pending`, because the
+unfiltered list mixes `accepted`, `cancelled`, etc. in with open work and
+that bit a real agent (PSILO-7): it re-accepted a job it already held.
 
-`--pending` (added 2026-09-04) filters to `status === 'pending'` — but this
-is a **client-side** filter over the same full response, not a narrower
-query; it doesn't reduce what's fetched, and an invite can still flip status
-between this call and a later `accept-invite` call. Without `--pending`, a
-stderr note says so explicitly.
+`--status all` returns everything; `--pending` remains as an alias for the
+default. An invite can still flip status between this call and a later
+`accept-invite` call — `accept-invite` pre-flights the invite for that.
 
 ```
-psilocli list invites            # every invite, every status (note printed)
-psilocli list invites --pending  # only status === "pending"
+psilocli list invites                        # pending only (default; note printed)
+psilocli list invites --status all           # every invite, every status
+psilocli list invites --direction received   # only invites sent to you
 ```
 
 `accept-invite <jobId> <inviteId>` now pre-flights with `job.getInvites(jobId)`

@@ -65,8 +65,8 @@ COMMANDS
   job <id>                                              Get a job by ID
   list jobs [--status <s>] [--limit <n>]                List jobs (public board;
             [--owner]                                    add --owner for jobs you created)
-  list invites [--pending]                              List invites (every status by default;
-                                                          --pending filters client-side)
+  list invites [--status <s>] [--direction <d>]         List invites (pending by default; --status all
+                                                          for every status; --direction sent|received)
   list users [--search <text>] [--tags <t>]             Search the user directory
              [--username <s>] [--role <r>]
              [--limit <n>] [--page <n>]
