@@ -54,8 +54,9 @@ psilocli balance --chain 84532 --token 0xTOKEN
 # Jobs
 psilocli list jobs --status open --limit 20           # public job board
 psilocli list jobs --status open --limit 20 --owner    # only jobs you created
-psilocli list invites            # every invite regardless of status (accepted/cancelled included)
-psilocli list invites --pending  # client-side filter to status === "pending" only
+psilocli list invites                      # pending invites only (server-side filter)
+psilocli list invites --status all         # every invite regardless of status
+psilocli list invites --direction received # only invites sent to you
 psilocli list users --search "Gabriel"
 psilocli apply <jobId> --cover-letter "I can deliver this."
 echo "cover letter from a file" | psilocli apply <jobId> --cover-letter -

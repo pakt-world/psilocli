@@ -5,7 +5,7 @@ import { out, print, fail, cliTable } from '../output.js'
 
 export const usage =
   'psilocli list jobs [--status <s>] [--limit <n>] [--owner]\n' +
-  'psilocli list invites [--pending]\n' +
+  'psilocli list invites [--status <pending|accepted|declined|cancelled|all>] [--direction <sent|received>] [--pending]\n' +
   'psilocli list users [--search <text>] [--tags <t>] [--username <s>] [--role <r>] [--limit <n>] [--page <n>]\n' +
   'psilocli list chains\n' +
   'psilocli list coins [--chain-id <n>]  (alias: list assets)'
@@ -56,27 +56,34 @@ export async function run(argv) {
 
   if (sub === 'invites') {
     const { values } = parseCommand(argv.slice(1), {
-      pending: { type: 'boolean' },
+      status:    { type: 'string' },
+      direction: { type: 'string' },
+      pending:   { type: 'boolean' },   // kept as an alias for --status pending
     })
     const config = resolveConfig(values)
     const { sdk } = await cliInit(config)
-    const { data: inviteList } = await sdk.job.listAllInvites()
-    let invites = inviteList?.data ?? []
-    // No server-side status filter exists (ListAllInvitesQuery is page/limit
-    // only) — this is a client-side filter over the same full list, not a
-    // narrower query. An invite can still flip status between this call and
-    // a later accept-invite call; this doesn't close that race.
-    if (values.pending) {
-      invites = invites.filter((i) => i.status === 'pending')
-    } else {
-      process.stderr.write(
-        'note: showing invites of every status. Pass --pending to see only ones still awaiting action.\n',
-      )
+    // Server-side filter (GET /v1/job/invites?status=&direction=). Default to
+    // pending: the unfiltered list includes accepted/declined invites, and
+    // acting on an already-accepted one is a paid no-op. --status all shows
+    // everything. The status can still flip between this call and a later
+    // accept-invite; accept-invite pre-flights the invite for that.
+    const status = values.status ?? (values.pending ? 'pending' : 'pending')
+    if (!['pending', 'accepted', 'declined', 'cancelled', 'all'].includes(status))
+      fail(`--status must be one of pending, accepted, declined, cancelled, all (got "${status}")`, 2)
+    if (values.direction && !['sent', 'received'].includes(values.direction))
+      fail(`--direction must be sent or received (got "${values.direction}")`, 2)
+    const query = {
+      ...(status !== 'all' ? { status } : {}),
+      ...(values.direction ? { direction: values.direction } : {}),
     }
+    if (!values.status && !values.pending)
+      process.stderr.write('note: showing pending invites only. Pass --status all to see every invite.\n')
+    const inviteList = sdkOk(await sdk.job.listAllInvites(query), 'job.listAllInvites')
+    const invites = inviteList?.data ?? []
     if (config.json) {
       out(invites)
     } else if (invites.length === 0) {
-      print(values.pending ? 'No pending invites found.' : 'No invites found.')
+      print(status === 'all' ? 'No invites found.' : `No ${status} invites found.`)
     } else {
       cliTable(
         invites.map((i) => [

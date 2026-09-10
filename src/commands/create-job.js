@@ -263,19 +263,25 @@ export async function run(argv) {
 
   const coinSymbol = values.coin ?? DEFAULTS.coin
   if (coinSymbol) {
-    const allCoins = sdkOk(await sdk.payment.fetchPaymentCoins(), 'payment.fetchPaymentCoins')
+    // Ask for the coin AS CONFIGURED ON THE TARGET CHAIN. Without a chainId the
+    // server answers for its default chain, so the flattened `contractAddress`
+    // it returns (and the note we print) would belong to that chain, not this
+    // job's. Seen live: Fuji job, Base Sepolia address printed.
+    const allCoins = sdkOk(
+      await sdk.payment.fetchPaymentCoins(chainId ? { chainId: String(chainId) } : undefined),
+      'payment.fetchPaymentCoins',
+    )
     const coin = (Array.isArray(allCoins) ? allCoins : []).find(
       c => c.active && c.symbol.toLowerCase() === coinSymbol.toLowerCase(),
     )
     if (!coin)
       fail(
-        `Coin "${coinSymbol}" not found or inactive.\n` +
-        'Run "psilocli list coins" to see available options.',
+        `Coin "${coinSymbol}" not found or inactive${chainId ? ` on chain ${chainId}` : ''}.\n` +
+        'Run "psilocli list coins [--chain-id <id>]" to see available options.',
         2,
       )
-    // Validate before job.create() — the server only enforces this later, in
-    // makeDeposit, by which point the (unfunded) job record already exists
-    // and has to be cleaned up with delete-job (see PSILO-8).
+    // Validate before job.create() — the server now enforces this too, but a
+    // local check saves the round trip (see PSILO-8).
     if (coin.minAmount != null && Number(amount) < Number(coin.minAmount))
       fail(
         `Amount ${amount} is below ${coin.symbol}'s minimum of ${coin.minAmount}.\n` +
@@ -283,14 +289,28 @@ export async function run(argv) {
         2,
       )
     currency = coin._id
+    const supported = (coin.rpcChainIds ?? []).map(String)
     if (!chainId) {
-      chainId = String((coin.rpcChainIds ?? [])[0] ?? '')
-    } else if (!(coin.rpcChainIds ?? []).map(String).includes(String(chainId))) {
-      note(`WARNING: --chain-id ${chainId} not in ${coin.symbol} chains (${(coin.rpcChainIds ?? []).join(', ')}). Using coin's first chain.`)
-      chainId = String((coin.rpcChainIds ?? [])[0] ?? '')
+      chainId = String(coin.resolvedChainId ?? supported[0] ?? '')
+    } else if (!supported.includes(String(chainId))) {
+      // Never silently switch chains: the escrow would be funded on a chain the
+      // caller did not ask for.
+      fail(
+        `--chain-id ${chainId} is not supported for ${coin.symbol}. Supported chains: ${supported.join(', ') || 'none'}`,
+        2,
+      )
     }
-    asset = coin.isToken ? (coin.contractAddresses?.[chainId] ?? coin.contractAddress ?? '') : ''
-    note(`Coin: ${coin.name} (${coin.symbol})${coin.isToken ? ` — contract ${asset}` : ' — native'}`)
+    if (coin.isToken) {
+      asset =
+        coin.contractAddresses?.[String(chainId)] ??
+        (String(coin.resolvedChainId ?? '') === String(chainId) ? coin.contractAddress : '') ??
+        ''
+      if (!asset)
+        fail(`${coin.symbol} has no contract address configured on chain ${chainId}`, 2)
+    } else {
+      asset = ''
+    }
+    note(`Coin: ${coin.name} (${coin.symbol}) on chain ${chainId}${coin.isToken ? ` — contract ${asset}` : ' — native'}`)
   }
 
   if (!chainId) {
