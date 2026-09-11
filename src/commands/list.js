@@ -4,7 +4,7 @@ import { fetchAvailableChains, resolveAssetSymbol } from '../chains.js'
 import { out, print, fail, cliTable } from '../output.js'
 
 export const usage =
-  'psilocli list jobs [--status <s>] [--limit <n>] [--owner]\n' +
+  'psilocli list jobs [--status <s>] [--limit <n>] [--owner [--include-archived]]\n' +
   'psilocli list invites [--status <pending|accepted|declined|cancelled|all>] [--direction <sent|received>] [--pending]\n' +
   'psilocli list users [--search <text>] [--tags <t>] [--username <s>] [--role <r>] [--limit <n>] [--page <n>]\n' +
   'psilocli list chains\n' +
@@ -18,22 +18,43 @@ export async function run(argv) {
       status: { type: 'string' },
       limit: { type: 'string' },
       owner: { type: 'boolean' },
+      'include-archived': { type: 'boolean' },
     })
     const config = resolveConfig(values)
-    const { sdk, userId } = await cliInit(config)
-    if (!values.owner)
-      process.stderr.write('note: showing the public job board, not just your own jobs. Pass --owner to scope to jobs you\'re a party to.\n')
-    const listOpts = {
-      status: values.status ?? 'open',
-      limit: parseInt(values.limit ?? '20', 10),
+    const { sdk } = await cliInit(config)
+    if (values['include-archived'] && !values.owner)
+      fail('--include-archived only applies with --owner (archived jobs are never on the public board)', 2)
+    // Two server views live behind GET /v1/job. `owner=true` is the party-scoped
+    // one: every job the caller is buyer OR seller on, full record, no default
+    // status filter. Without it the server answers with the public board, which
+    // is buyer-side only and strips escrow fields — 0.2.6 sent creator=<me>
+    // there, so a seller running --owner always saw "No jobs found".
+    const listOpts = { limit: parseInt(values.limit ?? '20', 10) }
+    if (values.owner) {
+      listOpts.owner = 'true'
+      if (values['include-archived']) listOpts.includeArchived = 'true'
+      if (values.status) listOpts.status = values.status
+      else process.stderr.write('note: showing your jobs in every status. Pass --status to narrow.\n')
+    } else {
+      listOpts.status = values.status ?? 'open'
+      process.stderr.write(
+        `note: showing the public job board filtered to status=${listOpts.status}. Pass --owner to see jobs you're a party to.\n`,
+      )
     }
-    if (values.owner) listOpts.creator = userId
     const result = sdkOk(await sdk.job.list(listOpts), 'job.list')
     const jobs = result?.data ?? (Array.isArray(result) ? result : [])
     if (config.json) {
       out(jobs)
     } else if (jobs.length === 0) {
-      print('No jobs found.')
+      // Name the filter that produced the empty answer so a caller can tell
+      // "nothing exists" from "nothing matched".
+      print(
+        values.owner
+          ? values.status
+            ? `No jobs of yours with status "${values.status}".`
+            : 'You are not a party to any job.'
+          : `No public jobs with status "${listOpts.status}".`,
+      )
     } else {
       const [allCoins, chains] = await Promise.all([
         sdkOk(await sdk.payment.fetchPaymentCoins(), 'payment.fetchPaymentCoins'),
@@ -44,7 +65,7 @@ export async function run(argv) {
         jobs.map((j) => [
           String(j._id).slice(-8),
           (j.title ?? '').slice(0, 40),
-          j.status ?? '',
+          j.isArchived ? `${j.status ?? ''} (archived)` : (j.status ?? ''),
           String(j.amount ?? ''),
           j.currency?.symbol ?? resolveAssetSymbol(coins, chains, j),
         ]),

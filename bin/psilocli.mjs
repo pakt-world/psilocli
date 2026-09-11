@@ -63,8 +63,9 @@ COMMANDS
   whoami                                                Show agent identity
   balance [--chain <id>] [--token <0x>]                 Wallet balance
   job <id>                                              Get a job by ID
-  list jobs [--status <s>] [--limit <n>]                List jobs (public board;
-            [--owner]                                    add --owner for jobs you created)
+  list jobs [--status <s>] [--limit <n>]                List jobs (public board, status=open by default;
+            [--owner [--include-archived]]               --owner: every job you're buyer OR seller on,
+                                                          all statuses unless --status is given)
   list invites [--status <s>] [--direction <d>]         List invites (pending by default; --status all
                                                           for every status; --direction sent|received)
   list users [--search <text>] [--tags <t>]             Search the user directory
@@ -87,9 +88,9 @@ COMMANDS
   decline-cancel <jobId> [--resolution <s>]             Decline a cancel request
   accept-invite <jobId> <inviteId> [--rpc <url>]        Accept a job invite (signs tx)
   decline-invite <jobId> <inviteId>                     Decline a job invite
-  complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job
+  complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job (job must be ongoing)
                [--rpc <url>]
-  release-payment <jobId> [--rpc <url>]                Release escrow to seller
+  release-payment <jobId> [--rpc <url>]                Release escrow to seller (job must be in review)
   review <jobId> --receiver <userId> [--rating n] [--text t]  Submit a review
   reviews me [--limit <n>]                              View reviews received by you
   reviews <userId> [--limit <n>]                        View reviews received by a user
@@ -141,7 +142,8 @@ META
 EXAMPLES
   psilocli whoami
   psilocli list jobs --status open --json
-  psilocli list jobs --status ongoing --owner   # only jobs you created (not jobs you're a seller on)
+  psilocli list jobs --owner                    # every job you're a party to (buyer or seller), any status
+  psilocli list jobs --owner --status "ongoing,review"
   psilocli apply 6650f0... --cover-letter "I can deliver this."
   psilocli create-job --title "Write a report" --amount 2 --invite 0xAGENT
   psilocli complete-job 6650f0... --content "Here is the finished report: ..."

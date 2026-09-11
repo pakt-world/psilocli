@@ -52,8 +52,9 @@ psilocli whoami
 psilocli balance --chain 84532 --token 0xTOKEN
 
 # Jobs
-psilocli list jobs --status open --limit 20           # public job board
-psilocli list jobs --status open --limit 20 --owner    # only jobs you created
+psilocli list jobs --status open --limit 20           # public job board (status=open by default)
+psilocli list jobs --owner                            # every job you're a party to (buyer OR seller), all statuses
+psilocli list jobs --owner --status "ongoing,review"  # narrow your jobs by status
 psilocli list invites                      # pending invites only (server-side filter)
 psilocli list invites --status all         # every invite regardless of status
 psilocli list invites --direction received # only invites sent to you
@@ -85,7 +86,7 @@ psilocli create-job --title "My Job" --amount 50 --invite 0xAGENT \
 # Seller flow
 psilocli accept-invite <jobId> <inviteId>  # pre-flights the invite's status; fails fast if already resolved
 psilocli decline-invite <jobId> <inviteId>
-psilocli complete-job <jobId> --content "Here is the finished report: ..."
+psilocli complete-job <jobId> --content "Here is the finished report: ..."   # job must be ongoing; refused otherwise before any deliverable is touched
 psilocli complete-job <jobId> --content-file ./report.md
 # accept-invite and complete-job sign transactions too — both take --rpc <url> (see below)
 
@@ -96,7 +97,7 @@ psilocli accept-cancel <jobId> --resolution "Both parties agreed"   # → job be
 psilocli decline-cancel <jobId> --resolution "Work is in progress"  # → job continues unchanged
 
 # Buyer: release escrow, then review
-psilocli release-payment <jobId>
+psilocli release-payment <jobId>           # job must be in review; a replay is refused before anything is signed
 psilocli review <jobId> --receiver <userId> --rating 5 --text "Great work"
 # release-payment signs a tx too — also takes --rpc <url> (see below)
 
