@@ -327,17 +327,24 @@ return after acceptance is handled server-side / on-chain and is not a separate
 CLI step. If the other party declines, the job resumes from exactly the status
 it was in before the request.
 
-**Cancellation fee (contract rule, 3.x wallets).** `accept-cancel` makes the
+**Fees (contract rule, 3.x wallets) are charged on top of the job value.**
+`makeDeposit` returns `coinAmount` (the job value) plus `feeBps` (150),
+`feeAmount` and `totalAmount`; the approve/deposit payloads move
+`totalAmount = amount + 1.5%` (the wallet's `totalDue()`), and `create-job`
+prints that via `describeDeposit()` before signing. On release the seller
+receives the full amount and the treasury the 1.5%. `accept-cancel` makes the
 server refund the buyer with the arbiter key, and `EscrowWallet.refundBuyer()`
-keeps `min(amount × feeBps / 10000, refundFeeCap)`; `refundFeeCap` is the
-per-token value the factory owner set (the token equivalent of $1, USDC
-`1_000_000`) and each wallet copied at creation. The fee is the same whoever
-signs (the 2.x seller waiver is gone). Release fees stay at the uncapped
-`feeBps`. `GET /v1/job/:id/cancel` returns `refund: { token, amount, feeBps,
-feeCap, fee, netToBuyer, decimals, symbol }` read from the escrow's own
-`getConfig()`/`refundFeeCap()`; `src/refund.js` → `describeRefund()` formats
-it, and `accept-cancel`/`decline-cancel`/`job` print it before acting.
-`feeCap: null` means a pre-upgrade (2.x) escrow: uncapped 1%. `accept-cancel`
+keeps `min(amount × refundFeeBps / 10000, refundFeeCap)` (1%, cap = the
+per-token value the factory owner set, the token equivalent of $1, USDC
+`1_000_000`) **out of the fee deposit**, returning the rest — the job value
+always comes back. The fee is the same whoever signs (the 2.x seller waiver
+is gone). `GET /v1/job/:id/cancel` returns `refund: { generation, token,
+amount, totalDue, feeBps, releaseFee, refundFeeBps, feeCap, fee, netToBuyer,
+decimals, symbol }` read from the escrow's `getConfig()`/`getFeeTerms()`;
+`src/refund.js` → `describeRefund()` formats it, and
+`accept-cancel`/`decline-cancel`/`job` print it before acting.
+`generation: 2` (feeCap null) means a pre-upgrade escrow: the fee comes out
+of the amount, uncapped, and the deposit was just the amount. `accept-cancel`
 prints `refundTxHash` from the response (0.2.6 dropped it), or "pending" when
 the server queued the refund for its retry job.
 
@@ -650,12 +657,13 @@ creation couldn't open new conversations. Re-verified live on 2026-09-04:
 call. If this error resurfaces, it's a regression, not the same known issue
 — investigate fresh rather than assuming "pending redeploy."
 
-## Refund preview helper (`src/refund.js`)
+## Fee formatting helpers (`src/refund.js`)
 
 `describeRefund(refund)` turns the server's base-unit strings into the
 sentence the cancel commands print, using `decimals`/`symbol` when present
-and falling back to `<n> base units` otherwise. Keep it the only place that
-formats the fee so the three commands never disagree.
+and falling back to `<n> base units` otherwise; `describeDeposit(d)` does the
+same for the make-deposit terms `create-job` prints. Keep them the only
+places that format fees so the commands never disagree.
 
 ## Adding a command
 

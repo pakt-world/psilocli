@@ -93,7 +93,8 @@ psilocli complete-job <jobId> --content-file ./report.md
 # Cancel flow — either the buyer or the seller can initiate
 psilocli cancel-job <jobId> --reason "Project scope changed" --explanation "Client pivoted"
 # The OTHER party then accepts or declines. Both print the refund preview first:
-#   "Accepting refunds 149 of 150 USDC to buyer (platform fee 1 USDC = min(1%, cap 1 USDC))"
+#   "Accepting refunds 151.25 USDC to buyer: the full 150 USDC job value plus what is left of the
+#    2.25 USDC fee deposit after the cancellation fee 1 USDC (= min(1%, cap 1 USDC))"
 psilocli accept-cancel <jobId> --resolution "Both parties agreed"   # → job "cancelled", buyer refunded on chain, refund tx printed
 psilocli decline-cancel <jobId> --resolution "Work is in progress"  # → job continues unchanged
 
@@ -180,27 +181,30 @@ Other party declines:
 If a cancel request is already pending, `cancel-job` exits early with the
 existing request ID rather than creating a duplicate.
 
-### Cancellation fee
+### Fees: charged on top of the job value
 
-Accepting a cancellation refunds the escrow to the buyer through the platform's
-arbiter key, and the escrow contract keeps a fee on that refund:
+The platform fee is never taken out of the job value. `create-job` deposits
+the job amount **plus** the release fee, and prints exactly what it is about
+to move (`deposit 152.25 USDC = 150 job value + 2.25 platform fee (1.5%)`):
 
 ```
-refund fee = min(amount × 1%, cap)        cap = the token equivalent of $1 (USDC: 1.00)
+deposit          = amount + amount × 1.5%          (buyer pays this into escrow)
+release          seller receives the full amount;   treasury keeps the 1.5%
+cancellation     treasury keeps min(amount × 1%, cap) of the fee deposit;
+                 buyer gets everything else back    cap = token equivalent of $1 (USDC: 1.00)
 ```
 
-| Job amount | Fee    | Buyer receives |
-| ---------- | ------ | -------------- |
-| 10 USDC    | 0.10   | 9.90           |
-| 150 USDC   | 1.00   | 149.00         |
+| Job amount | Buyer deposits | Seller gets on release | Buyer gets back on cancellation |
+| ---------- | -------------- | ---------------------- | ------------------------------- |
+| 10 USDC    | 10.15          | 10.00 (fee 0.15)       | 10.05 (fee 0.10)                |
+| 150 USDC   | 152.25         | 150.00 (fee 2.25)      | 151.25 (fee 1.00, capped)       |
 
-The fee does not depend on who requested or who accepted. Releasing a job to
-the seller pays the plain 1% with no cap (150 USDC → seller gets 148.50).
+The cancellation fee does not depend on who requested or who accepted.
 `accept-cancel`, `decline-cancel` and `job <id>` (while a request is pending)
 print the exact numbers, read from the escrow contract, before anything moves;
 `--json` carries them as `refund` in base units with `decimals`/`symbol`.
-Escrows created before the fee-cap upgrade show `no cap: pre-upgrade escrow`
-and pay the uncapped 1%.
+Escrows created before the upgrade (`generation: 2`, shown as `pre-upgrade
+escrow`) still take the fee out of the amount, uncapped.
 
 ## Archiving a job
 
