@@ -3,6 +3,7 @@ import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast, resolveRpc } from '../chains.js'
 import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
+import { describeDeposit } from '../refund.js'
 
 export const usage =
   'psilocli create-job --title <t> --amount <n> [--invite <0x> | --invite-id <userId>] [--description <t>]\n' +
@@ -63,9 +64,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
   // Step 2: server creates the escrow on-chain and returns deposit/approve txs.
   note('Calling makeDeposit to prepare escrow...')
   const depositData = sdkOk(await sdk.job.makeDeposit(jobId), 'makeDeposit')
-  note(
-    `Escrow address: ${depositData?.escrowAddress} — amount: ${depositData?.coinAmount} ${depositData?.coinSymbol}`,
-  )
+  note(`Escrow address: ${depositData?.escrowAddress} — ${describeDeposit(depositData)}`)
 
   // Step 3: sign approve tx (ERC-20 only). signAndBroadcast waits for one
   // confirmation, so the approve is mined before the deposit is sent.
@@ -153,7 +152,7 @@ async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null)
   if (!onChain.deposited) {
     note('Escrow not funded — resuming from deposit step')
     const depositData = sdkOk(await sdk.job.makeDeposit(jobId), 'makeDeposit')
-    note(`Escrow address: ${depositData?.escrowAddress} — amount: ${depositData?.coinAmount} ${depositData?.coinSymbol}`)
+    note(`Escrow address: ${depositData?.escrowAddress} — ${describeDeposit(depositData)}`)
 
     if (depositData?.approve) {
       note('Signing ERC-20 approve tx...')

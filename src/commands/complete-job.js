@@ -65,6 +65,12 @@ export async function run(argv) {
   if (jobSeller && jobSeller !== config.address.toLowerCase())
     fail(`Not the seller of "${job.title}" (seller: ${jobSeller})`)
 
+  // Pre-flight the status before touching a single deliverable: the server
+  // refuses completeJob for anything but an in-progress job, and 0.2.6 only
+  // found that out after marking deliverables and logging "completing job".
+  if (job.status !== 'ongoing')
+    fail(`Job "${job.title}" is ${job.status ?? 'unknown'}; only a job in progress (ongoing) can be marked complete. Nothing changed.`)
+
   const allDeliverables = job.deliverables ?? []
   if (allDeliverables.length === 0)
     note('No deliverables on this job — skipping deliverable completion step.')
@@ -124,8 +130,8 @@ export async function run(argv) {
   if (stillPending.length > 0)
     fail(`${stillPending.length} deliverable(s) still incomplete — aborting completeJob`)
 
-  note('All deliverables confirmed complete — completing job')
   const completeData = sdkOk(await sdk.job.completeJob(jobId, content ? { note: content } : {}), 'completeJob')
+  note(`Job accepted by server — ${allDeliverables.length} deliverable(s) recorded`)
 
   let txHash = null
   const { markReadyPayload } = completeData

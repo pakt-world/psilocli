@@ -162,34 +162,40 @@ calls `resolveRpc(sdk, null)` which picks the `isDefault` chain from
 ## Job listing (`sdk.job.list`)
 
 ```sh
-psilocli list jobs --status open --limit 20           # public job board
-psilocli list jobs --status open --limit 20 --owner    # only jobs you created
+psilocli list jobs --status open --limit 20           # public job board (status=open by default)
+psilocli list jobs --owner                            # every job you're a party to, any status
+psilocli list jobs --owner --status "ongoing,review"  # narrow by status
+psilocli list jobs --owner --include-archived         # also show jobs you archived
 ```
 
-`GET /v1/job` is a **public job board** — without `--owner`, it returns every
-job matching `status`/`limit` regardless of who created it, including jobs
-flagged `isPrivate: true`. This was previously misdiagnosed (an earlier
-version of this doc claimed `role`/`owner=true` fixed the scoping and that
-PSILO-1/PSILO-2 were "working as intended" — that was wrong).
+`GET /v1/job` serves **two views**, and which one you get is decided by
+`owner=true`, not by `creator`:
 
-Root cause: the CLI used to send `role` and `owner=true` as query params, but
-the SDK's `ListJobsQuery` type has no such fields — only `creator`, `buyer`,
-`seller`, `chainId`, `page`, `limit` are real. `role`/`owner` were silently
-ignored by the API, so every `list jobs` call — with or without `--owner` —
-returned the same unscoped public board. Confirmed live: a brand-new wallet
-with zero jobs got back 74 other people's completed jobs regardless of
-`--role buyer` vs `--role seller`.
+| Query | Server view | Who appears | Fields |
+|---|---|---|---|
+| `owner=true` (`--owner`) | `listJobs` — party-scoped | jobs where the caller is **buyer OR seller** (`role=` narrows) | full record incl. `buyer`, `seller`, `escrowAddress`, `escrowStatus`, deliverables |
+| anything else | `browseJobs` — public board | non-private jobs, optionally narrowed to one `creator` (buyer side only) | `PUBLIC_JOB_SELECT`: no wallets, no escrow fields |
 
-Fixed by dropping `role`/`owner` from the request and sending the real field
-instead: `--owner` now adds `creator: <your userId>` to the query, which
-*does* scope correctly (verified live — a fresh wallet with no jobs gets
-`[]`). Caveat: `creator` only covers jobs **you created** (the buyer side).
-If you're the seller (assigned talent) on someone else's job, `--owner`
-won't surface it — there's no confirmed single filter for "jobs I'm a party
-to regardless of side." Without `--owner`, you still get the full unscoped
-public board, including private jobs — that's a backend authorization gap
-the CLI can't fix client-side; filtering the response after the fact
-wouldn't stop the server from having sent the data.
+History, so nobody re-breaks this: 0.2.x sent `role`/`owner` before the SDK
+typed them (silently ignored → unscoped board, PSILO-1/2); 0.2.6 then sent
+`creator=<me>`, which is the **public board narrowed to yourself** — buyer
+side only, escrow fields stripped, and `status` defaulted to `open` on top.
+A seller running `list jobs --owner` therefore always saw "No jobs found",
+and a buyer with four `ongoing` jobs saw the same (the tester's F3). 0.3.0
+sends `owner=true` (typed in `@pakt/psilo` 0.2.0 `ListJobsQuery`) and applies
+**no default status** with `--owner`; the empty-state message names the
+filter it applied so an agent can tell "nothing exists" from "nothing
+matched":
+
+```
+You are not a party to any job.                 # --owner, no --status
+No jobs of yours with status "review".          # --owner --status review
+No public jobs with status "open".              # public board
+```
+
+Without `--owner` the public board is still the public board: it lists other
+people's jobs. `--include-archived` (with `--owner` only) adds jobs you
+archived; the Status column then shows `completed (archived)`.
 
 ### Token column resolution
 
@@ -264,11 +270,15 @@ cancel-job:
   job.getCancelRequest(jobId)      pre-flight: reject if already pending
   job.requestCancel(jobId, dto)
 
-delete-job: job.delete(jobId)     hard delete — for unfunded/junk jobs, no
-                                   counterparty acceptance needed
+archive-job:
+  job.getById(jobId)               pre-flight: status must be completed/cancelled/open
+  job.archive(jobId)               PATCH /v1/job/:id/archive — hides, never deletes;
+                                   server refuses an open job with a live escrow
 
                          accept-cancel / decline-cancel:
-                           job.acceptCancel(jobId, dto?)
+                           job.getCancelRequest(jobId)   pre-flight: must be pending;
+                                                         prints `refund` preview (fee = min(1%, cap))
+                           job.acceptCancel(jobId, dto?) → prints refundTxHash
                            job.declineCancel(jobId, dto?)
 
                          list invites → job.listAllInvites()     (--pending: client-side filter, see below)
@@ -277,10 +287,12 @@ delete-job: job.delete(jobId)     hard delete — for unfunded/junk jobs, no
                            job.acceptInvite(jobId, inviteId)
                            sign acceptPayload → confirmTx onAccept
                          complete-job:
-                           job.getById → toggleDeliverableProgress each
+                           job.getById                      pre-flight: seller check, status must be ongoing
+                           toggleDeliverableProgress each
                            job.completeJob(jobId)
                            sign markReadyPayload → confirmTx onMarkReady (6×10s)
 release-payment:
+  job.getById(jobId)               pre-flight: status must be review, escrow not released
   job.releasePayment(jobId)
   sign releasePayload → confirmTx onRelease
 review: job.submitReview(jobId, dto)
@@ -314,6 +326,27 @@ The OTHER party:
 return after acceptance is handled server-side / on-chain and is not a separate
 CLI step. If the other party declines, the job resumes from exactly the status
 it was in before the request.
+
+**Fees (contract rule, 3.x wallets) are charged on top of the job value.**
+`makeDeposit` returns `coinAmount` (the job value) plus `feeBps` (150),
+`feeAmount` and `totalAmount`; the approve/deposit payloads move
+`totalAmount = amount + 1.5%` (the wallet's `totalDue()`), and `create-job`
+prints that via `describeDeposit()` before signing. On release the seller
+receives the full amount and the treasury the 1.5%. `accept-cancel` makes the
+server refund the buyer with the arbiter key, and `EscrowWallet.refundBuyer()`
+keeps `min(amount × refundFeeBps / 10000, refundFeeCap)` (1%, cap = the
+per-token value the factory owner set, the token equivalent of $1, USDC
+`1_000_000`) **out of the fee deposit**, returning the rest — the job value
+always comes back. The fee is the same whoever signs (the 2.x seller waiver
+is gone). `GET /v1/job/:id/cancel` returns `refund: { generation, token,
+amount, totalDue, feeBps, releaseFee, refundFeeBps, feeCap, fee, netToBuyer,
+decimals, symbol }` read from the escrow's `getConfig()`/`getFeeTerms()`;
+`src/refund.js` → `describeRefund()` formats it, and
+`accept-cancel`/`decline-cancel`/`job` print it before acting.
+`generation: 2` (feeCap null) means a pre-upgrade escrow: the fee comes out
+of the amount, uncapped, and the deposit was just the amount. `accept-cancel`
+prints `refundTxHash` from the response (0.2.6 dropped it), or "pending" when
+the server queued the refund for its retry job.
 
 ### Invite listing and acceptance
 
@@ -351,19 +384,27 @@ server's own rejection, confirmed live, is what actually prevents a second
 signed accept from going through; this guard is a UX improvement layered on
 top of it, not the safety mechanism itself.
 
-### Deleting junk jobs
+### Archiving jobs (replaces delete-job, 0.3.0)
 
 `create-job` retries after a failed deposit each create a new `open` job
-rather than reusing the old one — the failed ones are never funded and have
-no counterparty, so `cancel-job`'s accept/decline dance doesn't apply. Remove
-them directly:
+rather than reusing the old one. Hide them:
 
 ```
-psilocli delete-job <jobId>
+psilocli archive-job <jobId>
+psilocli list jobs --owner --include-archived
 ```
 
-This calls `job.delete(jobId)` — a hard delete, not a cancel request. Expect
-the server to reject it once a job has a seller/escrow attached.
+`archive-job` calls `job.archive(jobId)` (`PATCH /v1/job/:id/archive`).
+Nothing is deleted; the server sets `isArchived`/`archivedAt` and every
+listing filters it out unless `includeArchived=true`; a party can still read
+it via `job <id>` (non-parties get 404). Rules, enforced server-side and
+pre-flighted by the CLI: only `completed`, `cancelled`, or `open` jobs; an
+`open` job whose escrow is live (`escrowAddress` set, `escrowStatus` neither
+`pending_create` nor released/refunded) is refused with the escrow address —
+that includes the create-job crash window where the deposit landed but
+`confirmTx onCreate` never ran, which the old `delete-job` let through
+because it keyed on `escrowPaid`. `create-job --resume` is the way out.
+`delete-job` is an unknown-command error with a hint pointing here.
 
 ### Job status vocabulary
 
@@ -373,7 +414,11 @@ the server to reject it once a job has a seller/escrow attached.
 | `ongoing`   | Seller accepted the invite; work in progress      |
 | `review`    | Seller marked ready; awaiting buyer release       |
 | `completed` | Payment released                                  |
+| `cancelling`| Cancel accepted on a funded job; on-chain refund not yet confirmed (transient) |
 | `cancelled` | Cancelled via `cancel-job` / `accept-cancel`      |
+
+`archived` is not a status; it is the `isArchived` flag that hides a
+completed, cancelled, or open job from listings (`archive-job`).
 
 The stats aggregate also tracks `invited` as a legacy status; treat it as equivalent to `open` if encountered.
 
@@ -564,13 +609,24 @@ Deposit not yet indexed by the API. The loop retries every 10s; if all 6
 fail, check the deposit tx hash on the explorer and re-run
 `psilocli create-job` — or fund the wallet if the deposit never went out.
 
-### `No releasePayload returned — job may not be in review status`
+### `Job <id> is ongoing; release is only possible in "review". Nothing signed.`
 
-`release-payment` only works after the seller's `complete-job` confirmed
-`onMarkReady`. Check `psilocli list jobs --status ongoing --owner`
-(`--owner` is required — without it, the API returns the public job board,
-not just jobs you created; and `--owner` only surfaces jobs where you're the
-buyer, not jobs where you're the seller).
+`release-payment` pre-flights the job (0.3.0): it fetches the record and
+refuses before asking the server for a payload unless `status === 'review'`,
+and refuses with the release tx hash if the escrow is already `released`
+(replay). The server (`status !== "review"`) and the contract
+(`AlreadyReleased`) are the real guards; the pre-flight only saves a round
+trip and names the actual reason. Poll `psilocli list jobs --owner --status
+"ongoing,review"` until the job reads `review`.
+
+### `Job "<title>" is review; only a job in progress (ongoing) can be marked complete.`
+
+`complete-job` pre-flights the status (0.3.0) before touching any
+deliverable — 0.2.6 marked deliverables complete and logged "All deliverables
+confirmed complete — completing job" *before* the server refused. Now nothing
+changes unless the job is `ongoing`; the success note reads `Job accepted by
+server — <n> deliverable(s) recorded` and prints only after `completeJob`
+succeeded.
 
 ### `psilocli reviews <userId>` returns "No reviews yet" / count: 0
 
@@ -600,6 +656,14 @@ creation couldn't open new conversations. Re-verified live on 2026-09-04:
 (`messages send --to <userId>` works end to end) and via a raw `wsRequest()`
 call. If this error resurfaces, it's a regression, not the same known issue
 — investigate fresh rather than assuming "pending redeploy."
+
+## Fee formatting helpers (`src/refund.js`)
+
+`describeRefund(refund)` turns the server's base-unit strings into the
+sentence the cancel commands print, using `decimals`/`symbol` when present
+and falling back to `<n> base units` otherwise; `describeDeposit(d)` does the
+same for the make-deposit terms `create-job` prints. Keep them the only
+places that format fees so the commands never disagree.
 
 ## Adding a command
 

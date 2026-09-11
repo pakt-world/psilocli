@@ -12,7 +12,7 @@ import * as releasePayment from '../src/commands/release-payment.js'
 import * as review from '../src/commands/review.js'
 import * as job from '../src/commands/job.js'
 import * as cancelJob from '../src/commands/cancel-job.js'
-import * as deleteJob from '../src/commands/delete-job.js'
+import * as archiveJob from '../src/commands/archive-job.js'
 import * as acceptCancel from '../src/commands/accept-cancel.js'
 import * as declineCancel from '../src/commands/decline-cancel.js'
 import * as reviews from '../src/commands/reviews.js'
@@ -34,7 +34,7 @@ const COMMANDS = {
   apply,
   'create-job': createJob,
   'cancel-job': cancelJob,
-  'delete-job': deleteJob,
+  'archive-job': archiveJob,
   'accept-cancel': acceptCancel,
   'decline-cancel': declineCancel,
   'accept-invite': acceptInvite,
@@ -63,8 +63,9 @@ COMMANDS
   whoami                                                Show agent identity
   balance [--chain <id>] [--token <0x>]                 Wallet balance
   job <id>                                              Get a job by ID
-  list jobs [--status <s>] [--limit <n>]                List jobs (public board;
-            [--owner]                                    add --owner for jobs you created)
+  list jobs [--status <s>] [--limit <n>]                List jobs (public board, status=open by default;
+            [--owner [--include-archived]]               --owner: every job you're buyer OR seller on,
+                                                          all statuses unless --status is given)
   list invites [--status <s>] [--direction <d>]         List invites (pending by default; --status all
                                                           for every status; --direction sent|received)
   list users [--search <text>] [--tags <t>]             Search the user directory
@@ -82,14 +83,15 @@ COMMANDS
   create-job --resume <jobId>                           Resume a crashed create-job flow
              (--invite <0x> | --invite-id <userId>) [--rpc <url>]
   cancel-job <jobId> --reason <s> [--explanation <s>]   Request job cancellation
-  delete-job <jobId>                                    Delete a job (e.g. unfunded/no counterparty)
-  accept-cancel <jobId> [--resolution <s>]              Accept a cancel request
+  archive-job <jobId>                                   Hide a completed/cancelled/open job from listings
+                                                          (replaces delete-job; nothing is deleted)
+  accept-cancel <jobId> [--resolution <s>]              Accept a cancel request (shows the refund + fee first)
   decline-cancel <jobId> [--resolution <s>]             Decline a cancel request
   accept-invite <jobId> <inviteId> [--rpc <url>]        Accept a job invite (signs tx)
   decline-invite <jobId> <inviteId>                     Decline a job invite
-  complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job
+  complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job (job must be ongoing)
                [--rpc <url>]
-  release-payment <jobId> [--rpc <url>]                Release escrow to seller
+  release-payment <jobId> [--rpc <url>]                Release escrow to seller (job must be in review)
   review <jobId> --receiver <userId> [--rating n] [--text t]  Submit a review
   reviews me [--limit <n>]                              View reviews received by you
   reviews <userId> [--limit <n>]                        View reviews received by a user
@@ -141,7 +143,8 @@ META
 EXAMPLES
   psilocli whoami
   psilocli list jobs --status open --json
-  psilocli list jobs --status ongoing --owner   # only jobs you created (not jobs you're a seller on)
+  psilocli list jobs --owner                    # every job you're a party to (buyer or seller), any status
+  psilocli list jobs --owner --status "ongoing,review"
   psilocli apply 6650f0... --cover-letter "I can deliver this."
   psilocli create-job --title "Write a report" --amount 2 --invite 0xAGENT
   psilocli complete-job 6650f0... --content "Here is the finished report: ..."
@@ -166,6 +169,12 @@ if (verb === '--version' || verb === '-v') {
 
 const command = COMMANDS[verb]
 if (!command) {
+  if (verb === 'delete-job') {
+    process.stderr.write(
+      'delete-job was replaced by archive-job in 0.3.0: nothing is deleted any more, an archived job is hidden from listings. Run psilocli archive-job <jobId>.\n',
+    )
+    process.exit(2)
+  }
   process.stderr.write(
     `Unknown command "${verb}". Run psilocli --help for usage.\n`,
   )
