@@ -12,7 +12,7 @@ import * as releasePayment from '../src/commands/release-payment.js'
 import * as review from '../src/commands/review.js'
 import * as job from '../src/commands/job.js'
 import * as cancelJob from '../src/commands/cancel-job.js'
-import * as deleteJob from '../src/commands/delete-job.js'
+import * as archiveJob from '../src/commands/archive-job.js'
 import * as acceptCancel from '../src/commands/accept-cancel.js'
 import * as declineCancel from '../src/commands/decline-cancel.js'
 import * as reviews from '../src/commands/reviews.js'
@@ -34,7 +34,7 @@ const COMMANDS = {
   apply,
   'create-job': createJob,
   'cancel-job': cancelJob,
-  'delete-job': deleteJob,
+  'archive-job': archiveJob,
   'accept-cancel': acceptCancel,
   'decline-cancel': declineCancel,
   'accept-invite': acceptInvite,
@@ -83,8 +83,9 @@ COMMANDS
   create-job --resume <jobId>                           Resume a crashed create-job flow
              (--invite <0x> | --invite-id <userId>) [--rpc <url>]
   cancel-job <jobId> --reason <s> [--explanation <s>]   Request job cancellation
-  delete-job <jobId>                                    Delete a job (e.g. unfunded/no counterparty)
-  accept-cancel <jobId> [--resolution <s>]              Accept a cancel request
+  archive-job <jobId>                                   Hide a completed/cancelled/open job from listings
+                                                          (replaces delete-job; nothing is deleted)
+  accept-cancel <jobId> [--resolution <s>]              Accept a cancel request (shows the refund + fee first)
   decline-cancel <jobId> [--resolution <s>]             Decline a cancel request
   accept-invite <jobId> <inviteId> [--rpc <url>]        Accept a job invite (signs tx)
   decline-invite <jobId> <inviteId>                     Decline a job invite
@@ -168,6 +169,12 @@ if (verb === '--version' || verb === '-v') {
 
 const command = COMMANDS[verb]
 if (!command) {
+  if (verb === 'delete-job') {
+    process.stderr.write(
+      'delete-job was replaced by archive-job in 0.3.0: nothing is deleted any more, an archived job is hidden from listings. Run psilocli archive-job <jobId>.\n',
+    )
+    process.exit(2)
+  }
   process.stderr.write(
     `Unknown command "${verb}". Run psilocli --help for usage.\n`,
   )

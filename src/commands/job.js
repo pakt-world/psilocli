@@ -1,6 +1,7 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
 import { out, print, note, fail, cliTable } from '../output.js'
+import { describeRefund } from '../refund.js'
 
 export const usage = 'psilocli job <id>'
 
@@ -15,8 +16,21 @@ export async function run(argv) {
   const result = sdkOk(await sdk.job.getById(id), 'job.getById')
   const job = result?.job ?? result
 
+  // A pending cancel request carries the refund preview (fee = min(1%, cap)).
+  // Only parties can read it; anyone else just gets the job.
+  let cancel = null
+  if (['open', 'ongoing', 'review', 'cancelling'].includes(job.status)) {
+    try {
+      const cr = await sdk.job.getCancelRequest(id)
+      if (cr && cr.status !== 'error') cancel = cr.data ?? null
+    } catch {
+      cancel = null
+    }
+  }
+  const pendingCancel = cancel?.cancelRequest?.status === 'pending' ? cancel : null
+
   if (config.json) {
-    out(job)
+    out(pendingCancel ? { ...job, cancelRequest: pendingCancel.cancelRequest, refund: pendingCancel.refund ?? null } : job)
     return
   }
 
@@ -33,6 +47,14 @@ export async function run(argv) {
   print(`Seller:       ${job.seller ?? job.sellerId ?? '—'}`)
   print(`Escrow:       ${job.escrowAddress ?? '—'}`)
   print(`Escrow status:${job.escrowStatus ?? '—'}`)
+  if (job.isArchived) print(`Archived:     yes${job.archivedAt ? ` (${new Date(job.archivedAt).toISOString().slice(0, 10)})` : ''}`)
+  if (job.escrowRefundTxHash) print(`Refund tx:    ${job.escrowRefundTxHash}`)
+  if (pendingCancel) {
+    const cr = pendingCancel.cancelRequest
+    print(`Cancel req:   pending (id ${cr._id}, reason: ${cr.reason ?? ''})`)
+    const preview = describeRefund(pendingCancel.refund)
+    print(`  accepting ${preview ?? 'cancels without an on-chain refund (escrow not funded)'}`)
+  }
   if (job.description)
     print(`Description:  ${job.description}`)
   if (job.deliverables?.length) {

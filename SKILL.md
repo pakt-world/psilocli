@@ -270,11 +270,15 @@ cancel-job:
   job.getCancelRequest(jobId)      pre-flight: reject if already pending
   job.requestCancel(jobId, dto)
 
-delete-job: job.delete(jobId)     hard delete — for unfunded/junk jobs, no
-                                   counterparty acceptance needed
+archive-job:
+  job.getById(jobId)               pre-flight: status must be completed/cancelled/open
+  job.archive(jobId)               PATCH /v1/job/:id/archive — hides, never deletes;
+                                   server refuses an open job with a live escrow
 
                          accept-cancel / decline-cancel:
-                           job.acceptCancel(jobId, dto?)
+                           job.getCancelRequest(jobId)   pre-flight: must be pending;
+                                                         prints `refund` preview (fee = min(1%, cap))
+                           job.acceptCancel(jobId, dto?) → prints refundTxHash
                            job.declineCancel(jobId, dto?)
 
                          list invites → job.listAllInvites()     (--pending: client-side filter, see below)
@@ -323,6 +327,27 @@ return after acceptance is handled server-side / on-chain and is not a separate
 CLI step. If the other party declines, the job resumes from exactly the status
 it was in before the request.
 
+**Fees (contract rule, 3.x wallets) are charged on top of the job value.**
+`makeDeposit` returns `coinAmount` (the job value) plus `feeBps` (150),
+`feeAmount` and `totalAmount`; the approve/deposit payloads move
+`totalAmount = amount + 1.5%` (the wallet's `totalDue()`), and `create-job`
+prints that via `describeDeposit()` before signing. On release the seller
+receives the full amount and the treasury the 1.5%. `accept-cancel` makes the
+server refund the buyer with the arbiter key, and `EscrowWallet.refundBuyer()`
+keeps `min(amount × refundFeeBps / 10000, refundFeeCap)` (1%, cap = the
+per-token value the factory owner set, the token equivalent of $1, USDC
+`1_000_000`) **out of the fee deposit**, returning the rest — the job value
+always comes back. The fee is the same whoever signs (the 2.x seller waiver
+is gone). `GET /v1/job/:id/cancel` returns `refund: { generation, token,
+amount, totalDue, feeBps, releaseFee, refundFeeBps, feeCap, fee, netToBuyer,
+decimals, symbol }` read from the escrow's `getConfig()`/`getFeeTerms()`;
+`src/refund.js` → `describeRefund()` formats it, and
+`accept-cancel`/`decline-cancel`/`job` print it before acting.
+`generation: 2` (feeCap null) means a pre-upgrade escrow: the fee comes out
+of the amount, uncapped, and the deposit was just the amount. `accept-cancel`
+prints `refundTxHash` from the response (0.2.6 dropped it), or "pending" when
+the server queued the refund for its retry job.
+
 ### Invite listing and acceptance
 
 `list invites` filters **server-side**: `GET /v1/job/invites` accepts
@@ -359,19 +384,27 @@ server's own rejection, confirmed live, is what actually prevents a second
 signed accept from going through; this guard is a UX improvement layered on
 top of it, not the safety mechanism itself.
 
-### Deleting junk jobs
+### Archiving jobs (replaces delete-job, 0.3.0)
 
 `create-job` retries after a failed deposit each create a new `open` job
-rather than reusing the old one — the failed ones are never funded and have
-no counterparty, so `cancel-job`'s accept/decline dance doesn't apply. Remove
-them directly:
+rather than reusing the old one. Hide them:
 
 ```
-psilocli delete-job <jobId>
+psilocli archive-job <jobId>
+psilocli list jobs --owner --include-archived
 ```
 
-This calls `job.delete(jobId)` — a hard delete, not a cancel request. Expect
-the server to reject it once a job has a seller/escrow attached.
+`archive-job` calls `job.archive(jobId)` (`PATCH /v1/job/:id/archive`).
+Nothing is deleted; the server sets `isArchived`/`archivedAt` and every
+listing filters it out unless `includeArchived=true`; a party can still read
+it via `job <id>` (non-parties get 404). Rules, enforced server-side and
+pre-flighted by the CLI: only `completed`, `cancelled`, or `open` jobs; an
+`open` job whose escrow is live (`escrowAddress` set, `escrowStatus` neither
+`pending_create` nor released/refunded) is refused with the escrow address —
+that includes the create-job crash window where the deposit landed but
+`confirmTx onCreate` never ran, which the old `delete-job` let through
+because it keyed on `escrowPaid`. `create-job --resume` is the way out.
+`delete-job` is an unknown-command error with a hint pointing here.
 
 ### Job status vocabulary
 
@@ -381,7 +414,11 @@ the server to reject it once a job has a seller/escrow attached.
 | `ongoing`   | Seller accepted the invite; work in progress      |
 | `review`    | Seller marked ready; awaiting buyer release       |
 | `completed` | Payment released                                  |
+| `cancelling`| Cancel accepted on a funded job; on-chain refund not yet confirmed (transient) |
 | `cancelled` | Cancelled via `cancel-job` / `accept-cancel`      |
+
+`archived` is not a status; it is the `isArchived` flag that hides a
+completed, cancelled, or open job from listings (`archive-job`).
 
 The stats aggregate also tracks `invited` as a legacy status; treat it as equivalent to `open` if encountered.
 
@@ -619,6 +656,14 @@ creation couldn't open new conversations. Re-verified live on 2026-09-04:
 (`messages send --to <userId>` works end to end) and via a raw `wsRequest()`
 call. If this error resurfaces, it's a regression, not the same known issue
 — investigate fresh rather than assuming "pending redeploy."
+
+## Fee formatting helpers (`src/refund.js`)
+
+`describeRefund(refund)` turns the server's base-unit strings into the
+sentence the cancel commands print, using `decimals`/`symbol` when present
+and falling back to `<n> base units` otherwise; `describeDeposit(d)` does the
+same for the make-deposit terms `create-job` prints. Keep them the only
+places that format fees so the commands never disagree.
 
 ## Adding a command
 
