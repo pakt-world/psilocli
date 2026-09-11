@@ -92,9 +92,14 @@ psilocli complete-job <jobId> --content-file ./report.md
 
 # Cancel flow — either the buyer or the seller can initiate
 psilocli cancel-job <jobId> --reason "Project scope changed" --explanation "Client pivoted"
-# The OTHER party then accepts or declines:
-psilocli accept-cancel <jobId> --resolution "Both parties agreed"   # → job becomes "cancelled"
+# The OTHER party then accepts or declines. Both print the refund preview first:
+#   "Accepting refunds 149 of 150 USDC to buyer (platform fee 1 USDC = min(1%, cap 1 USDC))"
+psilocli accept-cancel <jobId> --resolution "Both parties agreed"   # → job "cancelled", buyer refunded on chain, refund tx printed
 psilocli decline-cancel <jobId> --resolution "Work is in progress"  # → job continues unchanged
+
+# Archive a finished or never-started job (replaces delete-job; nothing is deleted)
+psilocli archive-job <jobId>                     # completed, cancelled, or open jobs only; hidden from listings
+psilocli list jobs --owner --include-archived    # see them again
 
 # Buyer: release escrow, then review
 psilocli release-payment <jobId>           # job must be in review; a replay is refused before anything is signed
@@ -175,6 +180,37 @@ Other party declines:
 If a cancel request is already pending, `cancel-job` exits early with the
 existing request ID rather than creating a duplicate.
 
+### Cancellation fee
+
+Accepting a cancellation refunds the escrow to the buyer through the platform's
+arbiter key, and the escrow contract keeps a fee on that refund:
+
+```
+refund fee = min(amount × 1%, cap)        cap = the token equivalent of $1 (USDC: 1.00)
+```
+
+| Job amount | Fee    | Buyer receives |
+| ---------- | ------ | -------------- |
+| 10 USDC    | 0.10   | 9.90           |
+| 150 USDC   | 1.00   | 149.00         |
+
+The fee does not depend on who requested or who accepted. Releasing a job to
+the seller pays the plain 1% with no cap (150 USDC → seller gets 148.50).
+`accept-cancel`, `decline-cancel` and `job <id>` (while a request is pending)
+print the exact numbers, read from the escrow contract, before anything moves;
+`--json` carries them as `refund` in base units with `decimals`/`symbol`.
+Escrows created before the fee-cap upgrade show `no cap: pre-upgrade escrow`
+and pay the uncapped 1%.
+
+## Archiving a job
+
+`archive-job <jobId>` replaces `delete-job` (removed in 0.3.0). Nothing is
+deleted: the job disappears from `list jobs --owner` until you pass
+`--include-archived`, and non-parties get a 404 on it. Only a `completed`,
+`cancelled`, or `open` job can be archived. An `open` job whose escrow still
+holds funds is refused with the escrow address in the message — refund it
+first (`cancel-job`) or finish it (`create-job --resume`).
+
 ## Job statuses
 
 | Status      | Meaning                                             |
@@ -184,6 +220,9 @@ existing request ID rather than creating a duplicate.
 | `review`    | Seller marked ready; buyer can release              |
 | `completed` | Payment released                                    |
 | `cancelled` | Cancelled via `cancel-job` + `accept-cancel`        |
+
+`archived` is not a status: it is a flag (`isArchived`) that hides a
+completed, cancelled, or open job from listings.
 
 ## Creating a job: full flow
 
