@@ -1,7 +1,6 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast, resolveRpc } from '../chains.js'
-import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 import { describeDeposit } from '../refund.js'
 
@@ -89,24 +88,15 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
     note(`Deposit tx confirmed — txHash: ${depositTxHash}`)
   }
 
-  // Step 5: validate payment on-chain; retries cover indexing lag.
-  let validated = false
-  for (let attempt = 1; attempt <= 6; attempt++) {
-    try {
-      sdkOk(await sdk.job.validatePayment(jobId), 'validatePayment')
-      validated = true
-      note(`Escrow funded and validated (attempt ${attempt})`)
-      break
-    } catch (err) {
-      note(`validatePayment attempt ${attempt}/6 failed: ${err.message}`)
-      if (attempt < 6) await sleep(10_000)
-    }
-  }
-  if (!validated) {
-    throw new Error(
-      'Escrow deposit could not be confirmed after 6 attempts — aborting invite',
-    )
-  }
+  // Step 5: validate payment on-chain; the SDK retries internally against indexing lag.
+  sdkOk(
+    await sdk.job.validatePayment(jobId, {
+      onRetry: ({ attempt, attempts, message }) =>
+        note(`validatePayment attempt ${attempt}/${attempts} failed: ${message}`),
+    }),
+    'validatePayment',
+  )
+  note('Escrow funded and validated')
 
   // Step 6: send the invite; sign the invite tx if escrow-locked.
   const inviteRef = inviteeAddress ?? inviteeUserId
@@ -168,20 +158,14 @@ async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null)
       note(`Deposit tx confirmed — txHash: ${depositTxHash}`)
     }
 
-    let validated = false
-    for (let attempt = 1; attempt <= 6; attempt++) {
-      try {
-        sdkOk(await sdk.job.validatePayment(jobId), 'validatePayment')
-        validated = true
-        note(`Escrow funded and validated (attempt ${attempt})`)
-        break
-      } catch (err) {
-        note(`validatePayment attempt ${attempt}/6 failed: ${err.message}`)
-        if (attempt < 6) await sleep(10_000)
-      }
-    }
-    if (!validated)
-      throw new Error('Escrow deposit could not be confirmed after 6 attempts — aborting invite')
+    sdkOk(
+      await sdk.job.validatePayment(jobId, {
+        onRetry: ({ attempt, attempts, message }) =>
+          note(`validatePayment attempt ${attempt}/${attempts} failed: ${message}`),
+      }),
+      'validatePayment',
+    )
+    note('Escrow funded and validated')
   } else {
     note('Escrow already funded — skipping deposit step')
   }
