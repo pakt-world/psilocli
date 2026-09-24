@@ -1,7 +1,7 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast } from '../chains.js'
-import { out, print, fail } from '../output.js'
+import { out, print, note, fail } from '../output.js'
 
 export const usage = 'psilocli accept-invite <jobId> <inviteId> [--rpc <url>]'
 
@@ -43,7 +43,10 @@ export async function run(argv) {
       throw err
     }
     sdkOk(
-      await sdk.job.confirmTx(jobId, { step: 'onAccept', txHash }),
+      await sdk.job.confirmTx(jobId, { step: 'onAccept', txHash }, {
+        onRetry: ({ attempt, attempts, message }) =>
+          note(`confirmTx onAccept attempt ${attempt}/${attempts} failed: ${message}`),
+      }),
       'confirmTx onAccept',
     )
   }

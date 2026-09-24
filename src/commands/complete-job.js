@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast } from '../chains.js'
-import { withMessaging, wsRequest, sleep } from '../messaging.js'
+import { withMessaging, wsRequest } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 
 export const usage =
@@ -140,23 +140,14 @@ export async function run(argv) {
     txHash = await signAndBroadcast(sdk, config.key, markReadyPayload, values.rpc ?? null)
     note(`markReady broadcast — txHash: ${txHash} — confirming with API...`)
 
-    let confirmed = false
-    for (let attempt = 1; attempt <= 6; attempt++) {
-      await sleep(10_000)
-      try {
-        sdkOk(
-          await sdk.job.confirmTx(jobId, { step: 'onMarkReady', txHash }),
-          'confirmTx onMarkReady',
-        )
-        note(`Job marked ready on-chain (attempt ${attempt})`)
-        confirmed = true
-        break
-      } catch (err) {
-        note(`confirmTx onMarkReady attempt ${attempt}/6 failed: ${err.message}`)
-      }
-    }
-    if (!confirmed)
-      fail(`confirmTx onMarkReady exhausted retries — txHash: ${txHash}`)
+    sdkOk(
+      await sdk.job.confirmTx(jobId, { step: 'onMarkReady', txHash }, {
+        onRetry: ({ attempt, attempts, message }) =>
+          note(`confirmTx onMarkReady attempt ${attempt}/${attempts} failed: ${message}`),
+      }),
+      'confirmTx onMarkReady',
+    )
+    note('Job marked ready on-chain')
   } else {
     note('Job completed (off-chain)')
   }
