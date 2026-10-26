@@ -93,8 +93,8 @@ psilocli complete-job <jobId> --content-file ./report.md
 # Cancel flow — either the buyer or the seller can initiate
 psilocli cancel-job <jobId> --reason "Project scope changed" --explanation "Client pivoted"
 # The OTHER party then accepts or declines. Both print the refund preview first:
-#   "Accepting refunds 151.25 USDC to buyer: the full 150 USDC job value plus what is left of the
-#    2.25 USDC fee deposit after the cancellation fee 1 USDC (= min(1%, cap 1 USDC))"
+#   "Accepting refunds 150.225 USDC to buyer: the full 150 USDC job value plus what is left of the
+#    0.45 USDC fee deposit after the 0.225 USDC cancellation fee withheld from it"
 psilocli accept-cancel <jobId> --resolution "Both parties agreed"   # → job "cancelled", buyer refunded on chain, refund tx printed
 psilocli decline-cancel <jobId> --resolution "Work is in progress"  # → job continues unchanged
 
@@ -184,22 +184,27 @@ existing request ID rather than creating a duplicate.
 ### Fees: charged on top of the job value
 
 The platform fee is never taken out of the job value. `create-job` deposits
-the job amount **plus** the release fee, and prints exactly what it is about
-to move (`deposit 152.25 USDC = 150 job value + 2.25 platform fee (1.5%)`):
+the job amount **plus** the platform fee, and prints exactly what it is about
+to move (`deposit 150.45 USDC = 150 job value + 0.45 platform fee (0.3%, charged on top; ...)`).
+There is no minimum fee:
 
 ```
-deposit          = amount + amount × 1.5%          (buyer pays this into escrow)
-release          seller receives the full amount;   treasury keeps the 1.5%
-cancellation     treasury keeps min(amount × 1%, cap) of the fee deposit;
-                 buyer gets everything else back    cap = token equivalent of $1 (USDC: 1.00)
+deposit          = amount + amount × 0.3%           (buyer pays this into escrow)
+release          seller receives the full amount;   the 0.3% goes to the FeeVault
+                 (0.05% buys $PAKT for the buyer, 0.1% for the seller, 0.15% locked liquidity)
+cancellation     withheld from the fee deposit only, then the buyer gets everything else back:
+                 0.05% before the seller commits, 0.15% after, capped at $1 (USDC: 1.00)
+dispute          5% of the job value, taken from the winner's payout (see the docs)
 ```
 
-| Job amount | Buyer deposits | Seller gets on release | Buyer gets back on cancellation |
-| ---------- | -------------- | ---------------------- | ------------------------------- |
-| 10 USDC    | 10.15          | 10.00 (fee 0.15)       | 10.05 (fee 0.10)                |
-| 150 USDC   | 152.25         | 150.00 (fee 2.25)      | 151.25 (fee 1.00, capped)       |
+| Job amount | Buyer deposits | Seller gets on release | Buyer gets back, cancel before commit | Buyer gets back, cancel after commit |
+| ---------- | -------------- | ---------------------- | ------------------------------------- | ------------------------------------ |
+| 10 USDC    | 10.03          | 10.00 (fee 0.03)       | 10.025 (fee 0.005)                    | 10.015 (fee 0.015)                   |
+| 150 USDC   | 150.45         | 150.00 (fee 0.45)      | 150.375 (fee 0.075)                   | 150.225 (fee 0.225)                  |
+| 1,000 USDC | 1,003.00       | 1,000.00 (fee 3.00)    | 1,002.50 (fee 0.50)                   | 1,002.00 (fee 1.00, capped)          |
 
-The cancellation fee does not depend on who requested or who accepted.
+The cancellation fee does not depend on who requested or who accepted; only
+on whether the seller had committed (accepted the invite) yet.
 `accept-cancel`, `decline-cancel` and `job <id>` (while a request is pending)
 print the exact numbers, read from the escrow contract, before anything moves;
 `--json` carries them as `refund` in base units with `decimals`/`symbol`.

@@ -16,7 +16,7 @@ export async function run(argv) {
   const result = sdkOk(await sdk.job.getById(id), 'job.getById')
   const job = result?.job ?? result
 
-  // A pending cancel request carries the refund preview (fee = min(1%, cap)).
+  // A pending cancel request carries the refund preview (fee = 5 or 15 bp by stage, capped at $1).
   // Only parties can read it; anyone else just gets the job.
   let cancel = null
   if (['open', 'ongoing', 'review', 'cancelling'].includes(job.status)) {

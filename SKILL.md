@@ -277,7 +277,7 @@ archive-job:
 
                          accept-cancel / decline-cancel:
                            job.getCancelRequest(jobId)   pre-flight: must be pending;
-                                                         prints `refund` preview (fee = min(1%, cap))
+                                                         prints `refund` preview (fee = 5/15 bp by stage, capped at $1)
                            job.acceptCancel(jobId, dto?) → prints refundTxHash
                            job.declineCancel(jobId, dto?)
 
@@ -328,16 +328,18 @@ CLI step. If the other party declines, the job resumes from exactly the status
 it was in before the request.
 
 **Fees (contract rule, 3.x wallets) are charged on top of the job value.**
-`makeDeposit` returns `coinAmount` (the job value) plus `feeBps` (150),
+`makeDeposit` returns `coinAmount` (the job value) plus `feeBps` (30),
 `feeAmount` and `totalAmount`; the approve/deposit payloads move
-`totalAmount = amount + 1.5%` (the wallet's `totalDue()`), and `create-job`
-prints that via `describeDeposit()` before signing. On release the seller
-receives the full amount and the treasury the 1.5%. `accept-cancel` makes the
-server refund the buyer with the arbiter key, and `EscrowWallet.refundBuyer()`
-keeps `min(amount × refundFeeBps / 10000, refundFeeCap)` (1%, cap = the
-per-token value the factory owner set, the token equivalent of $1, USDC
-`1_000_000`) **out of the fee deposit**, returning the rest — the job value
-always comes back. The fee is the same whoever signs (the 2.x seller waiver
+`totalAmount = amount + 0.3%` (the wallet's `totalDue()`, no minimum fee since
+2026-10-05; the deprecated `feeFloor` is always "0" and ignored), and
+`create-job` prints that via `describeDeposit()` before signing. On release
+the seller receives the full amount and the fee goes to the FeeVault.
+`accept-cancel` makes the server refund the buyer with the arbiter key, and
+`EscrowWallet.refundBuyer()` keeps `min(amount × bps / 10000, cancelFeeCap,
+postedFee)` (5 bp before the seller commits, 15 bp after; cap = the per-token
+value the factory owner set, the token equivalent of $1, USDC `1_000_000`)
+**out of the fee deposit**, returning the rest — the job value always comes
+back. The fee is the same whoever signs (the 2.x seller waiver
 is gone). `GET /v1/job/:id/cancel` returns `refund: { generation, token,
 amount, totalDue, feeBps, releaseFee, refundFeeBps, feeCap, fee, netToBuyer,
 decimals, symbol }` read from the escrow's `getConfig()`/`getFeeTerms()`;

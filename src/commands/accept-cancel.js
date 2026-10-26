@@ -18,7 +18,7 @@ export async function run(argv) {
   const { sdk } = await cliInit(config)
 
   // Show the number BEFORE the buyer agrees: the server reads the escrow's own
-  // fee terms (min(1%, cap)) so this is what the contract will pay out.
+  // fee terms (5 or 15 bp by stage, capped at $1) so this is what the contract will pay out.
   const pending = sdkOk(await sdk.job.getCancelRequest(jobId), 'job.getCancelRequest')
   const cr0 = pending?.cancelRequest
   if (!cr0 || cr0.status !== 'pending')
