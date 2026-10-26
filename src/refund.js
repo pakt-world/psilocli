@@ -12,20 +12,11 @@ function formatter(decimals, sym) {
   }
 }
 
-// Describes what actually set the fee. The posted fee is
-// `max(amount * feeBps / 1e4, feeFloor)`, so on any job below the crossover
-// (~83.34 USDC at 30 bp / $0.25) the FLOOR governs and the rate is a lie: a
-// 10 USDC job posts 0.25, which is 2.5% of the job, not 0.3%. Printing the
-// bare rate next to the real amount is what made one transaction look like it
-// had three different fee numbers. Returns "" when the rate governs normally.
-function basisNote(feeAmount, bps, floor) {
-  const rate = `${Number(bps ?? 0) / 100}%`
-  if (floor == null || feeAmount == null) return rate
-  // Compare as strings-of-numbers; both come from the server in the same units.
-  const fee = Number(feeAmount)
-  const flr = Number(floor)
-  if (!Number.isFinite(fee) || !Number.isFinite(flr) || flr <= 0) return rate
-  return fee > flr ? rate : `minimum fee, not ${rate}`
+// The posted fee is `amount * feeBps / 1e4` with no minimum (fee flow
+// 2026-10-05), so the rate always describes it. The server still sends a
+// deprecated `feeFloor` of "0"; it is ignored.
+function basisNote(bps) {
+  return `${Number(bps ?? 0) / 100}%`
 }
 
 // Formats the server's refund preview (GET /v1/job/:id/cancel → refund).
@@ -44,9 +35,10 @@ export function describeRefund(refund) {
       `(platform fee ${fmt(refund.fee)} = ${pct(refund.feeBps)}, taken out of the amount: pre-upgrade escrow)`
     )
   }
-  // 3.0.0: no separate refund rate and no cap (`refundFeeBps`/`feeCap` are
-  // deprecated and null here) — the rung is chosen by stage and floored, so
-  // quote the amount the contract gave us rather than recomputing a rate.
+  // 3.0.0: the rung is chosen by stage (5 bp before the seller commits, 15 bp
+  // after), capped at $1 and at the posted fee (`refundFeeBps`/`feeCap` are
+  // deprecated and null here), so quote the amount the contract gave us rather
+  // than recomputing a rate.
   const withheld =
     Number(refund.fee ?? 0) > 0
       ? `after the ${fmt(refund.fee)} cancellation fee withheld from it`
@@ -62,6 +54,6 @@ export function describeDeposit(d) {
   if (!d) return null
   const sym = d.coinSymbol ?? ''
   if (!d.totalAmount) return `amount: ${d.coinAmount} ${sym}`.trim()
-  const basis = basisNote(d.feeAmount, d.feeBps, d.feeFloor)
+  const basis = basisNote(d.feeBps)
   return `deposit ${d.totalAmount} ${sym} = ${d.coinAmount} job value + ${d.feeAmount} platform fee (${basis}, charged on top; the seller receives the full ${d.coinAmount})`.replace(/\s+/g, ' ')
 }
