@@ -3,6 +3,7 @@ import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast } from '../chains.js'
 import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
+import { disputedHint } from '../issues.js'
 
 export const usage = 'psilocli release-payment <jobId> [--rpc <url>]'
 
@@ -27,7 +28,7 @@ export async function run(argv) {
         '. Nothing signed.',
     )
   if (job?.status !== 'review')
-    fail(`Job ${jobId} is ${job?.status ?? 'unknown'}; release is only possible in "review". Nothing signed.`)
+    fail(`Job ${jobId} is ${job?.status ?? 'unknown'}; release is only possible in "review". Nothing signed.${disputedHint(job)}`)
   note(`Job "${job.title ?? jobId}" is in review — requesting release payload`)
 
   const releaseData = sdkOk(await sdk.job.releasePayment(jobId), 'releasePayment')

@@ -4,6 +4,7 @@ import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast } from '../chains.js'
 import { withMessaging, wsRequest } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
+import { disputedHint } from '../issues.js'
 
 export const usage =
   'psilocli complete-job <jobId> [--content <text> | --content-file <path>] [--rpc <url>]'
@@ -69,7 +70,7 @@ export async function run(argv) {
   // refuses completeJob for anything but an in-progress job, and 0.2.6 only
   // found that out after marking deliverables and logging "completing job".
   if (job.status !== 'ongoing')
-    fail(`Job "${job.title}" is ${job.status ?? 'unknown'}; only a job in progress (ongoing) can be marked complete. Nothing changed.`)
+    fail(`Job "${job.title}" is ${job.status ?? 'unknown'}; only a job in progress (ongoing) can be marked complete. Nothing changed.${disputedHint(job)}`)
 
   const allDeliverables = job.deliverables ?? []
   if (allDeliverables.length === 0)

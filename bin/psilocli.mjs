@@ -22,6 +22,9 @@ import * as user from '../src/commands/user.js'
 import * as auth from '../src/commands/auth.js'
 import * as wallet from '../src/commands/wallet.js'
 import * as token from '../src/commands/token.js'
+import * as issue from '../src/commands/issue.js'
+import * as jury from '../src/commands/jury.js'
+import * as rewards from '../src/commands/rewards.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../package.json')
@@ -49,6 +52,9 @@ const COMMANDS = {
   auth,
   wallet,
   token,
+  issue,
+  jury,
+  rewards,
 }
 
 const HELP = `
@@ -96,6 +102,22 @@ COMMANDS
   reviews me [--limit <n>]                              View reviews received by you
   reviews <userId> [--limit <n>]                        View reviews received by a user
                                                         job statuses: open|ongoing|review|completed|cancelled
+
+DISPUTES (job issues; every write is signed with your wallet)
+  issue open <jobId> --title <t> (--content <t>|--content-file f) --yes
+             [--attachment <uploadId>...] [--rpc <url>]  Open an issue: freezes the escrow, signs raiseDispute()
+  issue open --resume <issueId> [--rpc <url>]           Finish a crashed open (signs only if not on chain yet)
+  issue withdraw <issueId>                              Withdraw an issue raiseDispute() never reached
+  issue defend <issueId> --title <t> (--content <t>|--content-file f)  Defend, once; seals the panel
+  issue show <issueId>                                  Status, panel, verdict, settlement preview
+  issue list [--role plaintiff|defender|juror|invitee] [--status <s>]  Issues you are part of
+  jury invites                                          Panel invitations waiting on you
+  jury accept <issueId> | jury decline <issueId>        Take or refuse a seat
+  jury evidence <issueId> [--out <dir>]                 The case: job, deliverables, statements, chat
+  jury vote <issueId> --verdict plaintiff|defense       Commit + reveal (salt kept in ./.psilocli/jury
+            (--rationale <t>|--rationale-file f)          until the reveal lands)
+  jury vote <issueId> --resume                          Reveal a vote whose commit already landed
+  rewards [claim] [--chain <id>]                        $PAKT rebates / juror rewards waiting to be claimed
 
 MESSAGING
   messages list                                         List conversations
