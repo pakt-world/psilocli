@@ -1,0 +1,111 @@
+name: Release
+
+# Every merge into `release` publishes @pakt/psilocli to npm and tags it X.Y.Z.
+# The bump comes from the merged PR's title (or the pushed commit's subject):
+#   feat… -> major   fix… -> minor   bug… -> patch   anything else -> no release
+# The previous version is the higher of the latest X.Y.Z tag and the version
+# currently on npm, so a release that published but failed to tag is not repeated.
+
+on:
+  push:
+    branches: [release]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Resolve bump from commit title
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          # A merge commit reads "Merge pull request #N from …"; the PR title and
+          # branch carry the feat/fix/bug prefix.
+          pr_title=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].title // ""' || true)
+          pr_branch=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].head.ref // ""' || true)
+          subject=$(printf '%s' "$HEAD_SUBJECT" | head -n1)
+
+          bump=""
+          for candidate in "$pr_title" "$subject" "$pr_branch"; do
+            lower=$(printf '%s' "$candidate" | tr '[:upper:]' '[:lower:]')
+            case "$lower" in
+              feat*) bump=major ;;
+              fix*)  bump=minor ;;
+              bug*)  bump=patch ;;
+            esac
+            if [ -n "$bump" ]; then title="$candidate"; break; fi
+          done
+
+          if [ -z "$bump" ]; then
+            echo "::notice::No feat/fix/bug prefix in '${pr_title:-$subject}' — skipping release."
+          fi
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          echo "title=${title:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute next version
+        if: steps.bump.outputs.bump != ''
+        id: version
+        env:
+          BUMP: ${{ steps.bump.outputs.bump }}
+        run: |
+          name=$(node -p "require('./package.json').name")
+          tag=$(git tag -l '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          published=$(npm view "$name" version 2>/dev/null || true)
+          prev=$(printf '%s\n%s\n' "$tag" "$published" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          prev=${prev:-0.0.0}
+
+          IFS=. read -r major minor patch <<< "$prev"
+          case "$BUMP" in
+            major) next="$((major + 1)).0.0" ;;
+            minor) next="$major.$((minor + 1)).0" ;;
+            patch) next="$major.$minor.$((patch + 1))" ;;
+          esac
+
+          echo "$name: $prev -> $next ($BUMP)"
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Install and test
+        if: steps.bump.outputs.bump != ''
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+      - name: Publish to npm
+        if: steps.bump.outputs.bump != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          npm version "$NEXT" --no-git-tag-version --allow-same-version
+          npm publish --access public
+
+      - name: Tag and create GitHub release
+        if: steps.bump.outputs.bump != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT: ${{ steps.version.outputs.next }}
+          TITLE: ${{ steps.bump.outputs.title }}
+        run: |
+          git tag "$NEXT" "$GITHUB_SHA"
+          git push origin "$NEXT"
+          gh release create "$NEXT" --title "$NEXT" --notes "$TITLE" --generate-notes
