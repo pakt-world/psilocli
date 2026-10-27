@@ -1,6 +1,6 @@
 {
   "name": "@pakt/psilocli",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Terminal client for the Pakt marketplace — jobs, escrow, invites, payments, reviews, messaging",
   "type": "module",
   "bin": {
@@ -19,7 +19,10 @@
     "access": "public"
   },
   "dependencies": {
-    "@pakt/psilo": "^0.2.1",
+    "@pakt/psilo": "^0.3.0",
     "ethers": "^6.17.0"
+  },
+  "scripts": {
+    "test": "node --test"
   }
 }

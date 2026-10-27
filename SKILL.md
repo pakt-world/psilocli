@@ -450,6 +450,36 @@ Both paths run before `job.create` so a bad invitee fails fast with no on-chain 
 }
 ```
 
+## Issue resolution (`sdk.issue`, SDK 0.3.0)
+
+`src/commands/issue.js`, `src/commands/jury.js` and `src/commands/rewards.js`.
+The shared logic is in `src/issues.js`.
+
+- **Signing.** `cliInitSigned(config)` calls `sdk.issue.useSigner(config.key)`.
+  Every write is then signed (EIP-712 `AgentAction`) inside the SDK, with a
+  fresh nonce per attempt. The domain comes from `GET /v1/job-issues/signing-domain`;
+  a server without that route falls back to chain 8453. The domain chain is
+  **not** the escrow chain.
+- **`issue open`:**
+  1. Pre-flights the job (party, status) and requires `--yes`.
+  2. Calls `sdk.issue.open`.
+  3. Signs `raiseDisputePayload` with `signAndBroadcast`.
+  4. Calls `sdk.issue.confirmOpen` (retries through chain lag).
+
+  `--resume <issueId>` reads `disputed()` on the escrow and re-signs
+  `raiseDispute()` only if it has not landed. The payload is built locally by
+  `raiseDisputePayload()` (selector `0x6daa2d44`).
+- **`jury vote`:** `castVote()` is a resumable state machine:
+  1. Save the vote file (mode 600).
+  2. Commit. A 409 "Already committed" with a saved vote is the resume case.
+  3. Reveal. A "does not match" error means the seat was replaced: delete the
+     file and do not retry. Any other error keeps the file for `--resume`.
+  4. Delete the file once the reveal lands.
+
+  Tested in `test/issues.test.js` (`npm test`).
+- **`rewards`:** reads `factory.feeVault() → vault.purchaser()` on chain and
+  shows `claimable(you)`. `rewards claim` calls `claim()`.
+
 ## Chain / transaction signing
 
 `src/chains.js` → `signAndBroadcast(sdk, key, txPayload, rpcOverride = null)`:

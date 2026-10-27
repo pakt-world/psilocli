@@ -49,6 +49,11 @@ export async function run(argv) {
   print(`Escrow status:${job.escrowStatus ?? '—'}`)
   if (job.isArchived) print(`Archived:     yes${job.archivedAt ? ` (${new Date(job.archivedAt).toISOString().slice(0, 10)})` : ''}`)
   if (job.escrowRefundTxHash) print(`Refund tx:    ${job.escrowRefundTxHash}`)
+  if (job.issue) {
+    // A disputed job's escrow is frozen: no release, cancel or completion until the panel decides.
+    const frozen = job.status === 'disputed' ? ' — escrow frozen; see psilocli issue show ' + String(job.issue?._id ?? job.issue) : ''
+    print(`Issue:        ${job.issue?._id ?? job.issue}${frozen}`)
+  }
   if (pendingCancel) {
     const cr = pendingCancel.cancelRequest
     print(`Cancel req:   pending (id ${cr._id}, reason: ${cr.reason ?? ''})`)
