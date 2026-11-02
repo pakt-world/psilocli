@@ -106,6 +106,25 @@ export function resolveAssetSymbol(coins, chains, { asset, chainId }) {
   return `${asset.slice(0, 6)}…${asset.slice(-4)}`
 }
 
+const RELEASE_ABI = [
+  'function released() view returns (bool)',
+  'event Released(address indexed recipient, uint256 payout, uint256 fee, uint256 nonce)',
+]
+
+// Whether the escrow has paid out, read on chain. The API's record lags it when a release landed
+// but its confirmTx never ran (a killed process). `txHash` comes from the escrow's Released event
+// in the last `lookback` blocks (public RPCs cap log ranges near 10k); null when it is older.
+export async function escrowRelease(sdk, escrowAddress, chainId, rpcOverride = null, lookback = 9_000) {
+  const provider = new ethers.JsonRpcProvider(rpcOverride ?? (await resolveRpcUrl(sdk, chainId)))
+  const escrow = new ethers.Contract(escrowAddress, RELEASE_ABI, provider)
+  if (!(await escrow.released())) return { released: false, txHash: null }
+  const latest = await provider.getBlockNumber()
+  const logs = await escrow
+    .queryFilter(escrow.filters.Released(), Math.max(0, latest - lookback), latest)
+    .catch(() => [])
+  return { released: true, txHash: logs.at(-1)?.transactionHash ?? null }
+}
+
 // Reads ERC-20 balance, symbol and decimals directly from the token contract.
 export async function readTokenBalance(sdk, contractAddress, chainId, address) {
   const rpcUrl = await resolveRpcUrl(sdk, chainId)

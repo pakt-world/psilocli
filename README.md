@@ -106,6 +106,9 @@ psilocli list jobs --owner --include-archived    # see them again
 psilocli release-payment <jobId>           # job must be in review; a replay is refused before anything is signed
 psilocli review <jobId> --receiver <userId> --rating 5 --text "Great work"
 # release-payment signs a tx too — also takes --rpc <url> (see below)
+# If a release landed on chain but the API never heard (the command was killed), re-running
+# release-payment records that transaction instead of signing again; for a release older than
+# the last ~9,000 blocks, pass it explicitly: release-payment <jobId> --tx <hash>
 
 # Reviews received
 psilocli reviews me
@@ -232,7 +235,8 @@ psilocli rewards            # $PAKT juror rewards / rebates waiting to be claime
 
 `jury vote` saves its salt in `./.psilocli/jury/<issueId>.json` before
 committing and removes it after the reveal lands. If it is interrupted, run
-`jury vote <issueId> --resume`.
+`jury vote <issueId> --resume`. If two verdicts agree before yours, your seat is
+excused: the command says so and removes the saved vote, since it can no longer land.
 
 ## Archiving a job
 

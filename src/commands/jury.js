@@ -73,9 +73,13 @@ function renderEvidence(ev) {
     '',
     '### Deliverables',
     '',
-    ...ev.job.deliverables.map(
-      (d, i) => `${i + 1}. ${d.description} — ${d.status}${d.comment ? `\n\n   ${d.comment.replace(/\n/g, '\n   ')}` : ''}`,
-    ),
+    ...ev.job.deliverables.map((d, i) => {
+      // `title` is the deliverable's name; older servers sent only `description`.
+      const name = d.title || d.description || '(untitled)'
+      const detail = d.description && d.description !== name ? `\n\n   ${d.description.replace(/\n/g, '\n   ')}` : ''
+      const comment = d.comment ? `\n\n   Delivered: ${d.comment.replace(/\n/g, '\n   ')}` : ''
+      return `${i + 1}. ${name} — ${d.status}${detail}${comment}`
+    }),
     '',
     '### Completion note',
     '',
@@ -156,6 +160,13 @@ async function vote(argv) {
   )
   if (config.json) return out({ ok: true, issueId, ...result })
   if (result.alreadyRevealed) return print(`Your vote on issue ${issueId} was already revealed.`)
+  if (result.closed) {
+    return print(
+      result.excused
+        ? `Issue ${issueId} was decided before your vote; your seat is excused. Nothing to do; the saved vote was removed.`
+        : `Votes are closed on issue ${issueId}; your vote can no longer land. The saved vote was removed.`,
+    )
+  }
   print(`Vote revealed on issue ${issueId}${result.onTime ? ' (on time)' : ' (late: no reward)'}. Issue status: ${result.issueStatus}.`)
 }
 

@@ -1,14 +1,18 @@
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
-import { signAndBroadcast } from '../chains.js'
+import { escrowRelease, signAndBroadcast } from '../chains.js'
 import { sleep } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 import { disputedHint } from '../issues.js'
 
-export const usage = 'psilocli release-payment <jobId> [--rpc <url>]'
+export const usage = 'psilocli release-payment <jobId> [--tx <hash>] [--rpc <url>]'
 
 export async function run(argv) {
-  const { values, positionals } = parseCommand(argv, { rpc: { type: 'string' } }, { positionals: true })
+  const { values, positionals } = parseCommand(
+    argv,
+    { rpc: { type: 'string' }, tx: { type: 'string' } },
+    { positionals: true },
+  )
   const jobId = positionals[0]
   if (!jobId) fail(`Usage: ${usage}`, 2)
 
@@ -29,8 +33,32 @@ export async function run(argv) {
     )
   if (job?.status !== 'review')
     fail(`Job ${jobId} is ${job?.status ?? 'unknown'}; release is only possible in "review". Nothing signed.${disputedHint(job)}`)
-  note(`Job "${job.title ?? jobId}" is in review — requesting release payload`)
 
+  // The API can be behind the chain: a release that landed but whose confirmTx never ran (the
+  // process was killed) leaves the job in review. Signing again would only revert with
+  // AlreadyReleased, so confirm the release that landed instead.
+  const onChain = job.escrowAddress
+    ? await escrowRelease(sdk, job.escrowAddress, job.escrowChainId ?? job.chainId, values.rpc ?? null).catch((err) => {
+        note(`Could not read the escrow on chain (${err.shortMessage ?? err.message}); continuing with the API.`)
+        return { released: false, txHash: null }
+      })
+    : { released: false, txHash: null }
+  if (values.tx && !onChain.released)
+    fail(`--tx confirms a release that already landed, but escrow ${job.escrowAddress} has not released. Nothing signed.`, 2)
+  if (onChain.released) {
+    const txHash = values.tx ?? onChain.txHash
+    if (!txHash)
+      fail(
+        `Escrow ${job.escrowAddress} has already released on chain, but its release is older than the blocks searched. ` +
+          `Re-run with --tx <hash> (the escrow's Released transaction) to record it. Nothing signed.`,
+      )
+    note(`Escrow already released on chain (tx ${txHash}); recording it with the API — nothing signed.`)
+    sdkOk(await sdk.job.confirmTx(jobId, { step: 'onRelease', txHash }), 'confirmTx onRelease')
+    if (config.json) return out({ ok: true, jobId, txHash, recovered: true })
+    return print(`Payment release recorded — txHash: ${txHash}`)
+  }
+
+  note(`Job "${job.title ?? jobId}" is in review — requesting release payload`)
   const releaseData = sdkOk(await sdk.job.releasePayment(jobId), 'releasePayment')
   const releasePayload = releaseData?.releasePayload
   if (!releasePayload)

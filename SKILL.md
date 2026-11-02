@@ -293,6 +293,10 @@ archive-job:
                            sign markReadyPayload → confirmTx onMarkReady (6×10s)
 release-payment:
   job.getById(jobId)               pre-flight: status must be review, escrow not released
+  escrowRelease() (chains.js)      on-chain released(); if already released (a release whose
+                                   confirmTx never ran), find its Released event in the last
+                                   9,000 blocks (or take --tx <hash>) → confirmTx onRelease,
+                                   nothing signed
   job.releasePayment(jobId)
   sign releasePayload → confirmTx onRelease
 review: job.submitReview(jobId, dto)
@@ -475,6 +479,10 @@ The shared logic is in `src/issues.js`.
   3. Reveal. A "does not match" error means the seat was replaced: delete the
      file and do not retry. Any other error keeps the file for `--resume`.
   4. Delete the file once the reveal lands.
+
+  On commit or reveal, an "excused" refusal (two verdicts agreed before this
+  one) or "Votes are not open" (older servers) ends the vote: the file is
+  deleted and `{ closed: true, excused }` is returned, since it can never land.
 
   Tested in `test/issues.test.js` (`npm test`).
 - **`rewards`:** reads `factory.feeVault() → vault.purchaser()` on chain and

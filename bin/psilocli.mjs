@@ -97,7 +97,7 @@ COMMANDS
   decline-invite <jobId> <inviteId>                     Decline a job invite
   complete-job <jobId> [--content <t>|--content-file f] Complete deliverables and job (job must be ongoing)
                [--rpc <url>]
-  release-payment <jobId> [--rpc <url>]                Release escrow to seller (job must be in review)
+  release-payment <jobId> [--tx <hash>] [--rpc <url>]  Release escrow to seller (job must be in review)
   review <jobId> --receiver <userId> [--rating n] [--text t]  Submit a review
   reviews me [--limit <n>]                              View reviews received by you
   reviews <userId> [--limit <n>]                        View reviews received by a user
@@ -157,7 +157,7 @@ GLOBAL OPTIONS (every command)
   history and process lists.
 
 META
-  -h, --help              Show this help
+  -h, --help              Show this help (or a command's usage: psilocli <command> --help)
   -v, --version           Show version
 
   Exit codes: 0 = success, 1 = error, 2 = usage error.
@@ -203,8 +203,17 @@ if (!command) {
   process.exit(2)
 }
 
+// <command> --help / -h prints that command's usage. The commands' own strict parsers would
+// otherwise reject it as an unknown option. Tokens after a `--` terminator are left alone.
+const rest = argv.slice(1)
+const end = rest.indexOf('--')
+if ((end < 0 ? rest : rest.slice(0, end)).some((a) => a === '--help' || a === '-h')) {
+  console.log(`Usage:\n${command.usage}`)
+  process.exit(0)
+}
+
 command
-  .run(argv.slice(1))
+  .run(rest)
   .then(() => {
     process.exitCode = 0
   })

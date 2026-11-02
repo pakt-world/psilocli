@@ -61,8 +61,9 @@ async function open(argv) {
 
   // Opening freezes the escrow until a panel decides, and the winner pays 5% of the job value.
   if (!values.yes) {
+    const { symbol } = await tokenMeta(sdk, job)
     fail(
-      `Opening an issue on job ${jobId} (${job.amount} job value) freezes its escrow: no release, ` +
+      `Opening an issue on job ${jobId} (job value ${`${job.amount} ${symbol}`.trim()}) freezes its escrow: no release, ` +
         'cancel or completion until a sealed panel decides. The winner takes the escrow minus a 5% ' +
         'dispute fee; the loser gets nothing. Re-run with --yes to open it.',
       2,
@@ -178,7 +179,7 @@ async function show(argv) {
     cliTable(
       issue.panel.map((s) => [
         s.isOverseer ? 'Overseer' : `seat ${s.seat}`,
-        s.replaced ? 'replaced' : s.revealed ? 'revealed' : s.committed ? 'committed' : 'waiting',
+        s.replaced ? 'replaced' : s.revealed ? 'revealed' : s.excused ? 'excused' : s.committed ? 'committed' : 'waiting',
         new Date(s.verdictDeadline).toISOString().replace('T', ' ').slice(0, 16),
         s.verdict ?? '',
       ]),
