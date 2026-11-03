@@ -5,7 +5,7 @@ import { out, print, note, fail } from '../output.js'
 import { describeDeposit } from '../refund.js'
 
 export const usage =
-  'psilocli create-job --title <t> --amount <n> [--invite <0x> | --invite-id <userId>] [--description <t>]\n' +
+  'psilocli create-job --title <t> --amount <n> [--invite <0x> | --invite-id <userId> | --open] [--description <t>]\n' +
   '                    [--coin <symbol>] [--currency <s>] [--chain-id <id>]\n' +
   '                    [--deliverable <t> ...] [--rpc <url>]\n' +
   'psilocli create-job --resume <jobId> [--invite <0x> | --invite-id <userId>] [--rpc <url>]  Resume a crashed create-job flow'
@@ -31,8 +31,10 @@ async function resolveUserIdByAddress(sdk, address) {
 }
 
 export async function createJobAndInvite(sdk, config, inviteeAddress, params, inviteeUserIdOverride = null, rpcOverride = null) {
-  let inviteeUserId
-  if (inviteeUserIdOverride) {
+  let inviteeUserId = null
+  if (params.open) {
+    // An open job takes applications instead of an invitee (psilocli applications).
+  } else if (inviteeUserIdOverride) {
     // Validate the user ID exists before touching the chain.
     sdkOk(await sdk.user.getUserById(inviteeUserIdOverride), 'user.getUserById')
     note(`Invitee user ID verified: ${inviteeUserIdOverride}`)
@@ -51,6 +53,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
     ...(params.currency ? { currency: params.currency } : {}),
     ...(params.asset ? { asset: params.asset } : {}),
     deliverables: params.deliverables.map(d => ({ name: d })),
+    ...(params.open ? { isPrivate: false } : {}),
   }
 
   // Step 1: create the job record.
@@ -98,6 +101,11 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
   )
   note('Escrow funded and validated')
 
+  if (params.open) {
+    note(`Job "${params.title}" (${jobId}) is open for applications: psilocli applications list ${jobId}`)
+    return { jobId, open: true }
+  }
+
   // Step 6: send the invite; sign the invite tx if escrow-locked.
   const inviteRef = inviteeAddress ?? inviteeUserId
   note(`Inviting ${inviteRef} to job ${jobId}...`)
@@ -125,7 +133,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
   return { jobId, inviteeAddress, inviteeUserId }
 }
 
-async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null) {
+async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null, inviteeIdDirect = null) {
   note('WARNING: Multi-step on-chain flow (~60s). Do not interrupt or wrap in a timeout.')
 
   const jobData = sdkOk(await sdk.job.getById(jobId), 'job.getById')
@@ -176,11 +184,22 @@ async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null)
     return { jobId, resumed: true }
   }
 
-  if (!inviteeAddress)
-    fail('Escrow is funded but no invite sent. Provide --invite <address> to complete resume.', 2)
+  if (!inviteeAddress && !inviteeIdDirect)
+    fail(
+      'Escrow is funded but no invite sent. Provide --invite <address> or --invite-id <userId> to complete resume, ' +
+        'or leave the job open and accept an application (psilocli applications).',
+      2,
+    )
 
-  const inviteeUserId = await resolveUserIdByAddress(sdk, inviteeAddress)
-  note(`Inviting ${inviteeAddress} (userId: ${inviteeUserId}) to job ${jobId}...`)
+  let inviteeUserId
+  if (inviteeIdDirect) {
+    sdkOk(await sdk.user.getUserById(inviteeIdDirect), 'user.getUserById')
+    inviteeUserId = inviteeIdDirect
+  } else {
+    inviteeUserId = await resolveUserIdByAddress(sdk, inviteeAddress)
+  }
+  const inviteRef = inviteeAddress ?? inviteeUserId
+  note(`Inviting ${inviteRef} (userId: ${inviteeUserId}) to job ${jobId}...`)
   const inviteData = sdkOk(
     await sdk.job.inviteTalent(jobId, { inviteeId: inviteeUserId }),
     'inviteTalent',
@@ -197,7 +216,7 @@ async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null)
     note(`confirmTx onInvite — txHash: ${txHash}`)
   }
 
-  note(`Invite sent to ${inviteeAddress} for job ${jobId}`)
+  note(`Invite sent to ${inviteRef} for job ${jobId}`)
   return { jobId, resumed: true }
 }
 
@@ -212,6 +231,7 @@ export async function run(argv) {
     deliverable:  { type: 'string', multiple: true },
     invite:       { type: 'string' },
     'invite-id':  { type: 'string' },
+    open:         { type: 'boolean' },
     resume:       { type: 'string' },
     rpc:          { type: 'string' },
   })
@@ -223,14 +243,16 @@ export async function run(argv) {
   if (values.resume) {
     const config = resolveConfig(values)
     const { sdk } = await cliInit(config)
-    const result = await resumeJob(sdk, config, values.resume, inviteeAddress, rpcOverride)
+    const result = await resumeJob(sdk, config, values.resume, inviteeAddress, rpcOverride, inviteeIdDirect)
     if (config.json) out({ ok: true, ...result })
     else print(`Job ${result.jobId} resumed successfully`)
     return
   }
 
-  if (!inviteeAddress && !inviteeIdDirect)
-    fail('--invite <address> or --invite-id <userId> is required (or set INVITE_AGENT_ADDRESS)', 2)
+  if (values.open && (values.invite || inviteeIdDirect))
+    fail('--open takes applications instead of an invitee; drop --invite / --invite-id', 2)
+  if (!values.open && !inviteeAddress && !inviteeIdDirect)
+    fail('--invite <address> or --invite-id <userId> is required (or set INVITE_AGENT_ADDRESS), or --open for applications', 2)
   if (!values.title) fail('--title is required', 2)
 
   const config = resolveConfig(values)
@@ -308,7 +330,7 @@ export async function run(argv) {
   // -------------------------------------------------
 
   note('WARNING: Multi-step on-chain flow (~60s). Do not interrupt or wrap in a timeout.')
-  const result = await createJobAndInvite(sdk, config, inviteeAddress, {
+  const result = await createJobAndInvite(sdk, config, values.open ? null : inviteeAddress, {
     title:       values.title,
     description: values.description ?? DEFAULTS.description,
     amount,
@@ -316,7 +338,9 @@ export async function run(argv) {
     chainId,
     asset,
     deliverables: values.deliverable ?? [DEFAULTS.deliverable],
-  }, inviteeIdDirect, rpcOverride)
+    open:        Boolean(values.open),
+  }, values.open ? null : inviteeIdDirect, rpcOverride)
   if (config.json) out({ ok: true, ...result })
+  else if (result.open) print(`Job created and open for applications — jobId: ${result.jobId}`)
   else print(`Job created and invite sent — jobId: ${result.jobId}`)
 }

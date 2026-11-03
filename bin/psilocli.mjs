@@ -7,6 +7,9 @@ import * as apply from '../src/commands/apply.js'
 import * as createJob from '../src/commands/create-job.js'
 import * as acceptInvite from '../src/commands/accept-invite.js'
 import * as declineInvite from '../src/commands/decline-invite.js'
+import * as revokeInvite from '../src/commands/revoke-invite.js'
+import * as refundJob from '../src/commands/refund-job.js'
+import * as applications from '../src/commands/applications.js'
 import * as completeJob from '../src/commands/complete-job.js'
 import * as releasePayment from '../src/commands/release-payment.js'
 import * as review from '../src/commands/review.js'
@@ -42,6 +45,9 @@ const COMMANDS = {
   'decline-cancel': declineCancel,
   'accept-invite': acceptInvite,
   'decline-invite': declineInvite,
+  'revoke-invite': revokeInvite,
+  'refund-job': refundJob,
+  applications,
   'complete-job': completeJob,
   'release-payment': releasePayment,
   review,
@@ -82,13 +88,16 @@ COMMANDS
   list assets [--chain-id <n>]                          Alias for list coins
   apply <jobId> --cover-letter <text | ->               Apply to a job (- reads stdin)
   create-job --title <t> --amount <n>                   Create, fund escrow, and invite
-             (--invite <0x> | --invite-id <userId>)
+             (--invite <0x> | --invite-id <userId> | --open)
              [--description <t>] [--deliverable <t> ...]
              [--coin <symbol>] [--currency <s>] [--chain-id <id>]
              [--rpc <url>]
   create-job --resume <jobId>                           Resume a crashed create-job flow
              (--invite <0x> | --invite-id <userId>) [--rpc <url>]
-  cancel-job <jobId> --reason <s> [--explanation <s>]   Request job cancellation
+  applications list|accept|reject <jobId> [<appId>]     Review applications to an open job (--open)
+  revoke-invite <jobId> <inviteeUserId>                 Withdraw an invitation not yet accepted
+  cancel-job <jobId> --reason <s> [--explanation <s>]   Request job cancellation (immediate when no seller accepted)
+  refund-job <jobId> --yes [--rpc <url>]                Seller: return the funds to the buyer (also after delivery)
   archive-job <jobId>                                   Hide a completed/cancelled/open job from listings
                                                           (replaces delete-job; nothing is deleted)
   accept-cancel <jobId> [--resolution <s>]              Accept a cancel request (shows the refund + fee first)

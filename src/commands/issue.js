@@ -118,7 +118,9 @@ function report(config, issue, txHash) {
   print(`Issue:   ${issue._id}`)
   print(`Status:  ${issue.status}`)
   if (txHash) print(`Raise tx: ${txHash}`)
-  note('The escrow is frozen. The other party now has one defence; then a sealed panel decides.')
+  // Since paktsuite F23 a defender who misses the limit (server ISSUE_DEFENSE_LIMIT_MS, 72 h by default) loses.
+  note('The escrow is frozen. The other party now has one defence, then a sealed panel decides. ' +
+    'No defence within the limit (72 h by default) decides the issue for you, without a panel.')
 }
 
 // ── withdraw / defend ───────────────────────────────────────────────────────

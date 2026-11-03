@@ -43,10 +43,12 @@ export async function run(argv) {
   print(`Amount:       ${job.amount ?? ''} ${currencyDisplay}`)
   print(`Chain:        ${job.chainId ?? ''}`)
   print(`Asset:        ${job.asset || '(native)'}`)
-  print(`Buyer:        ${job.buyer ?? ''}`)
-  print(`Seller:       ${job.seller ?? job.sellerId ?? '—'}`)
-  print(`Escrow:       ${job.escrowAddress ?? '—'}`)
-  print(`Escrow status:${job.escrowStatus ?? '—'}`)
+  // Buyer, seller and escrow address are withheld from non-parties (an invitee
+  // is not a party until it accepts), so absent means "not shown", not "none".
+  print(`Buyer:        ${job.buyer || '—'}`)
+  print(`Seller:       ${job.seller || job.sellerId || '—'}`)
+  print(`Escrow:       ${job.escrowAddress || '—'}`)
+  print(`Escrow status: ${job.escrowStatus || '—'}`)
   if (job.isArchived) print(`Archived:     yes${job.archivedAt ? ` (${new Date(job.archivedAt).toISOString().slice(0, 10)})` : ''}`)
   if (job.escrowRefundTxHash) print(`Refund tx:    ${job.escrowRefundTxHash}`)
   if (job.issue) {
@@ -67,11 +69,12 @@ export async function run(argv) {
     cliTable(
       job.deliverables.map((d, i) => [
         String(i + 1),
-        d.name ?? '',
-        `${d.progress ?? 0}%`,
+        d.title ?? d.name ?? '',
+        d.status ?? '',
       ]),
-      ['#', 'Name', 'Progress'],
+      ['#', 'Title', 'Status'],
     )
   }
+  if (!job.escrowAddress && job.escrowStatus) note('Escrow details are shown to the buyer and seller only (an invitee sees them once it accepts).')
   print(`Created:      ${job.createdAt ? new Date(job.createdAt).toISOString().slice(0, 10) : ''}`)
 }
