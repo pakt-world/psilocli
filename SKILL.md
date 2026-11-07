@@ -267,8 +267,22 @@ create-job --resume <jobId>:        (crash recovery)
   if status not ongoing/review/completed → inviteTalent (needs --invite)
 
 cancel-job:
-  job.getCancelRequest(jobId)      pre-flight: reject if already pending
-  job.requestCancel(jobId, dto)
+  job.getCancelRequest(jobId)      pre-flight: reject if already pending — except on an `open`
+                                   job: no seller accepted, so the server cancels and refunds
+                                   at once (autoResolved, refundTxHash), even over an old
+                                   pending request
+  job.requestCancel(jobId, dto)    refused on a `review` job: the buyer must release or open an
+                                   issue; only the seller can return the funds (refund-job)
+
+refund-job (seller):               partyRole must be seller; getCancelRequest → refund preview;
+                                   needs --yes; job.refund(jobId) → custodial: refundTxHash;
+                                   self-custody: sign refundPayload → confirmTx onRefund
+                                   (SDK ≥ the job.refund / "onRefund" change)
+
+create-job --open:                 create + fund, no invite (isPrivate: false)
+applications list|accept|reject:   job.listApplications / acceptApplication / rejectApplication
+                                   (accept invites the applicant and rejects the rest)
+revoke-invite:                     job.cancelInvite(jobId, inviteeId)
 
 archive-job:
   job.getById(jobId)               pre-flight: status must be completed/cancelled/open
@@ -293,6 +307,10 @@ archive-job:
                            sign markReadyPayload → confirmTx onMarkReady (6×10s)
 release-payment:
   job.getById(jobId)               pre-flight: status must be review, escrow not released
+  escrowRelease() (chains.js)      on-chain released(); if already released (a release whose
+                                   confirmTx never ran), find its Released event in the last
+                                   9,000 blocks (or take --tx <hash>) → confirmTx onRelease,
+                                   nothing signed
   job.releasePayment(jobId)
   sign releasePayload → confirmTx onRelease
 review: job.submitReview(jobId, dto)
@@ -469,12 +487,21 @@ The shared logic is in `src/issues.js`.
   `--resume <issueId>` reads `disputed()` on the escrow and re-signs
   `raiseDispute()` only if it has not landed. The payload is built locally by
   `raiseDisputePayload()` (selector `0x6daa2d44`).
+- **Default verdict.** A defender who does not answer within the server's
+  `ISSUE_DEFENSE_LIMIT_MS` (72 h by default) loses: the worker resolves the
+  issue for the plaintiff with `decidedBy: "default"`, no panel, and pays out.
+  `issue show` then prints "decided by default". The CLI only words this; the
+  limit lives on the server.
 - **`jury vote`:** `castVote()` is a resumable state machine:
   1. Save the vote file (mode 600).
   2. Commit. A 409 "Already committed" with a saved vote is the resume case.
   3. Reveal. A "does not match" error means the seat was replaced: delete the
      file and do not retry. Any other error keeps the file for `--resume`.
   4. Delete the file once the reveal lands.
+
+  On commit or reveal, an "excused" refusal (two verdicts agreed before this
+  one) or "Votes are not open" (older servers) ends the vote: the file is
+  deleted and `{ closed: true, excused }` is returned, since it can never land.
 
   Tested in `test/issues.test.js` (`npm test`).
 - **`rewards`:** reads `factory.feeVault() → vault.purchaser()` on chain and

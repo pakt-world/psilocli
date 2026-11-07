@@ -67,8 +67,12 @@ async function history(argv) {
   } else if (messages.length === 0) {
     print('No messages in this conversation.')
   } else {
+    const names = new Map(
+      (conversation?.recipients ?? []).map((r) => [String(r._id), recipientNames([r])]),
+    )
     for (const m of messages) {
-      print(`[${m.createdAt ?? ''}] ${m.user}: ${m.content ?? ''}`)
+      const sender = String(m.user?._id ?? m.user ?? '')
+      print(`[${m.createdAt ?? ''}] ${names.get(sender) ?? sender}: ${m.content ?? ''}`)
     }
     if (all.length > messages.length)
       note(`Showing last ${messages.length} of ${all.length} messages`)

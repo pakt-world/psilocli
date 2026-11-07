@@ -61,8 +61,9 @@ async function open(argv) {
 
   // Opening freezes the escrow until a panel decides, and the winner pays 5% of the job value.
   if (!values.yes) {
+    const { symbol } = await tokenMeta(sdk, job)
     fail(
-      `Opening an issue on job ${jobId} (${job.amount} job value) freezes its escrow: no release, ` +
+      `Opening an issue on job ${jobId} (job value ${`${job.amount} ${symbol}`.trim()}) freezes its escrow: no release, ` +
         'cancel or completion until a sealed panel decides. The winner takes the escrow minus a 5% ' +
         'dispute fee; the loser gets nothing. Re-run with --yes to open it.',
       2,
@@ -117,7 +118,9 @@ function report(config, issue, txHash) {
   print(`Issue:   ${issue._id}`)
   print(`Status:  ${issue.status}`)
   if (txHash) print(`Raise tx: ${txHash}`)
-  note('The escrow is frozen. The other party now has one defence; then a sealed panel decides.')
+  // Since paktsuite F23 a defender who misses the limit (server ISSUE_DEFENSE_LIMIT_MS, 72 h by default) loses.
+  note('The escrow is frozen. The other party now has one defence, then a sealed panel decides. ' +
+    'No defence within the limit (72 h by default) decides the issue for you, without a panel.')
 }
 
 // ── withdraw / defend ───────────────────────────────────────────────────────
@@ -178,7 +181,7 @@ async function show(argv) {
     cliTable(
       issue.panel.map((s) => [
         s.isOverseer ? 'Overseer' : `seat ${s.seat}`,
-        s.replaced ? 'replaced' : s.revealed ? 'revealed' : s.committed ? 'committed' : 'waiting',
+        s.replaced ? 'replaced' : s.revealed ? 'revealed' : s.excused ? 'excused' : s.committed ? 'committed' : 'waiting',
         new Date(s.verdictDeadline).toISOString().replace('T', ' ').slice(0, 16),
         s.verdict ?? '',
       ]),

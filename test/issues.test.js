@@ -98,6 +98,34 @@ test('a mismatched reveal is reported once and never retried', async () => {
   assert.deepEqual(t.calls.map((c) => c[0]), ['commit', 'reveal'])
 })
 
+test('an excused seat ends the vote and removes the saved file', async () => {
+  const store = tmpStore()
+  const t = stubSdk({
+    commit: () => err('This issue was decided before your vote; your seat is excused and there is nothing to do'),
+  })
+  const res = await castVote(t.sdk, 'i1', { verdict: 'defense', rationale: 'r' }, store)
+  assert.equal(res.closed, true)
+  assert.equal(res.excused, true)
+  assert.equal(store.load('i1'), null)
+  assert.deepEqual(t.calls.map((c) => c[0]), ['commit'])
+})
+
+test('"Votes are not open" (older servers) also ends the vote instead of keeping a dead file', async () => {
+  const store = tmpStore()
+  const t = stubSdk({ commit: () => err('Votes are not open on this issue') })
+  const res = await castVote(t.sdk, 'i1', { verdict: 'defense', rationale: 'r' }, store)
+  assert.deepEqual([res.closed, res.excused], [true, false])
+  assert.equal(store.load('i1'), null)
+})
+
+test('a reveal refused because the case closed after the commit also removes the file', async () => {
+  const store = tmpStore()
+  const t = stubSdk({ reveal: () => err('Votes are not open on this issue') })
+  const res = await castVote(t.sdk, 'i1', { verdict: 'defense', rationale: 'r' }, store)
+  assert.equal(res.closed, true)
+  assert.equal(store.load('i1'), null)
+})
+
 test('a different vote cannot overwrite a saved one', async () => {
   const store = tmpStore()
   const t = stubSdk({ reveal: () => err('ETIMEDOUT') })

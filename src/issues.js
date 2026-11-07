@@ -111,6 +111,15 @@ export function voteStore(baseDir = process.cwd()) {
 }
 
 const messageOf = (res) => (Array.isArray(res?.message) ? res.message.join('; ') : String(res?.message ?? ''))
+
+// The case is decided (or closed) and this vote can never land: the server says the seat is
+// excused, or (older servers) that votes are not open. Either way the saved vote is dead.
+const votingClosed = (msg) => /excused|decided before your vote|votes are not open/i.test(msg)
+
+function closeVote(store, issueId, msg) {
+  store.remove(issueId)
+  return { revealed: false, closed: true, excused: /excused|decided before your vote/i.test(msg), message: msg }
+}
 const isError = (res) => !res || res.status === 'error'
 
 /**
@@ -143,6 +152,7 @@ export async function castVote(sdk, issueId, { verdict, rationale, resume = fals
   if (!vote.committedAt) {
     const commitment = voteCommitment(vote.verdict, vote.rationaleHash, vote.jurorSalt)
     const res = await sdk.issue.juryCommit(issueId, commitment)
+    if (isError(res) && votingClosed(messageOf(res))) return closeVote(store, issueId, messageOf(res))
     if (isError(res) && !/already committed/i.test(messageOf(res))) {
       throw new Error(`jury commit failed: ${messageOf(res)}`)
     }
@@ -169,6 +179,7 @@ export async function castVote(sdk, issueId, { verdict, rationale, resume = fals
       store.remove(issueId)
       return { revealed: true, alreadyRevealed: true }
     }
+    if (votingClosed(msg)) return closeVote(store, issueId, msg)
     throw new Error(`jury reveal failed: ${msg}. The vote is kept at ${store.path(issueId)}; retry with --resume.`)
   }
   store.remove(issueId)
