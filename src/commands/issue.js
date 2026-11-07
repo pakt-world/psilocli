@@ -187,13 +187,30 @@ async function show(argv) {
       ]),
       ['Seat', 'State', 'Deadline (UTC)', 'Verdict'],
     )
+    // The API returns a seat's rationale once the issue resolves (or to the seat's own juror).
+    for (const s of issue.panel) {
+      if (!s.rationale) continue
+      print(`Rationale (${s.isOverseer ? 'Overseer' : `seat ${s.seat}`}${s.verdict ? `, ${s.verdict}` : ''}): ${s.rationale}`)
+    }
   }
   const own = issue.invites?.[0]
   if (own) print(`Your invite: ${own.status}`)
   if (issue.verdict) print(`Verdict:    ${issue.verdict} (${issue.outcome}, decided by ${issue.decidedBy || 'panel'})`)
-  print(`Settlement: ${issue.settlement?.status ?? 'pending'}${issue.settlement?.txHash ? ` — tx ${issue.settlement.txHash}` : ''}`)
+  const settlement = issue.settlement ?? {}
+  print(`Settlement: ${settlement.status ?? 'pending'}${settlement.txHash ? ` — tx ${settlement.txHash}` : ''}`)
   const p = preview?.preview
-  if (p) {
+  if (settlement.status === 'settled') {
+    // After settlement the preview counts only the on-time jurors, so it is what was paid.
+    const winner = issue.verdict ? ` (${issue.verdict})` : ''
+    const at = settlement.settledAt ? ` on ${new Date(settlement.settledAt).toISOString().replace('T', ' ').slice(0, 16)} UTC` : ''
+    if (p) {
+      print(`Settled:    winner${winner} received ${fmtUnits(p.winnerPayout, meta)} (job ${fmtUnits(p.amount, meta)} minus ${fmtUnits(p.disputeFee, meta)} dispute fee)${at};`)
+      print(`            each on-time juror ${fmtUnits(p.jurorEach, meta)} as $PAKT; liquidity ${fmtUnits(p.liquidity, meta)}`)
+    } else {
+      print(`Settled:    winner${winner} received the payout${at}`)
+    }
+    if (settlement.jurors?.length) print(`Paid jurors: ${settlement.jurors.length}`)
+  } else if (p) {
     print(`If settled: winner receives ${fmtUnits(p.winnerPayout, meta)} (job ${fmtUnits(p.amount, meta)} minus ${fmtUnits(p.disputeFee, meta)} dispute fee);`)
     print(`            each on-time juror ${fmtUnits(p.jurorEach, meta)} as $PAKT; liquidity ${fmtUnits(p.liquidity, meta)}`)
   }

@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit, sdkOk } from '../client.js'
-import { signAndBroadcast } from '../chains.js'
+import { escrowReady, signAndBroadcast } from '../chains.js'
 import { withMessaging, wsRequest } from '../messaging.js'
 import { out, print, note, fail } from '../output.js'
 import { disputedHint } from '../issues.js'
 
 export const usage =
-  'psilocli complete-job <jobId> [--content <text> | --content-file <path>] [--rpc <url>]'
+  'psilocli complete-job <jobId> [--content <text> | --content-file <path>] [--tx <hash>] [--rpc <url>]\n' +
+  '  --tx <hash>  record a markReady that already landed on chain (when it is older than the blocks searched)'
 
 // A deliverable whose title/description asks the seller to message the buyer.
 function isMessagingDeliverable(deliverable) {
@@ -47,6 +48,7 @@ export async function run(argv) {
       content: { type: 'string' },
       'content-file': { type: 'string' },
       rpc: { type: 'string' },
+      tx: { type: 'string' },
     },
     { positionals: true },
   )
@@ -135,11 +137,35 @@ export async function run(argv) {
   note(`Job accepted by server — ${allDeliverables.length} deliverable(s) recorded`)
 
   let txHash = null
+  let recovered = false
   const { markReadyPayload } = completeData
   if (markReadyPayload) {
-    note(`Signing markReady tx for chain ${markReadyPayload.chainId}...`)
-    txHash = await signAndBroadcast(sdk, config.key, markReadyPayload, values.rpc ?? null)
-    note(`markReady broadcast — txHash: ${txHash} — confirming with API...`)
+    // A rerun after markReady landed but before its confirmTx ran (a killed process): the
+    // escrow is already ready, so record that tx instead of signing markReady a second time.
+    const escrowAddress = job.escrowAddress || markReadyPayload.to
+    const chainId = markReadyPayload.chainId ?? job.escrowChainId ?? job.chainId
+    const onChain = escrowAddress
+      ? await escrowReady(sdk, escrowAddress, chainId, values.rpc ?? null).catch((err) => {
+          note(`Could not read the escrow on chain (${err.shortMessage ?? err.message}); continuing with the API.`)
+          return { ready: false, txHash: null }
+        })
+      : { ready: false, txHash: null }
+    if (values.tx && !onChain.ready)
+      fail(`--tx records a markReady that already landed, but escrow ${escrowAddress} is not marked ready. Nothing signed.`, 2)
+    if (onChain.ready) {
+      txHash = values.tx ?? onChain.txHash
+      if (!txHash)
+        fail(
+          `Escrow ${escrowAddress} is already marked ready on chain, but its markReady is older than the blocks searched. ` +
+            'Re-run with --tx <hash> (the escrow\'s ReadyForRelease transaction) to record it. Nothing signed.',
+        )
+      recovered = true
+      note(`Escrow already marked ready on chain (tx ${txHash}); recording it with the API — nothing signed.`)
+    } else {
+      note(`Signing markReady tx for chain ${markReadyPayload.chainId}...`)
+      txHash = await signAndBroadcast(sdk, config.key, markReadyPayload, values.rpc ?? null)
+      note(`markReady broadcast — txHash: ${txHash} — confirming with API...`)
+    }
 
     sdkOk(
       await sdk.job.confirmTx(jobId, { step: 'onMarkReady', txHash }, {
@@ -153,6 +179,6 @@ export async function run(argv) {
     note('Job completed (off-chain)')
   }
 
-  if (config.json) out({ ok: true, jobId, txHash })
+  if (config.json) out({ ok: true, jobId, txHash, ...(recovered ? { recovered: true } : {}) })
   else print(txHash ? `Job ${jobId} complete — txHash: ${txHash}` : `Job ${jobId} complete`)
 }

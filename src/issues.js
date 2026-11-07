@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from 'node:path'
 import { ethers } from 'ethers'
 import { newJurorSalt, sha256Hex, voteCommitment } from '@pakt/psilo'
-import { resolveRpcUrl } from './chains.js'
+import { makeProvider, resolveRpcUrl, withRpcTimeout } from './chains.js'
 import { cliInit } from './client.js'
 
 // Shared by the issue, jury and rewards commands: signed SDK session, text inputs, token
@@ -45,13 +45,13 @@ export async function tokenMeta(sdk, job) {
   const chainId = job.escrowChainId ?? job.chainId
   if (!job.asset) return { symbol: 'native', decimals: 18 }
   try {
-    const provider = new ethers.JsonRpcProvider(await resolveRpcUrl(sdk, chainId))
+    const url = await resolveRpcUrl(sdk, chainId)
     const erc20 = new ethers.Contract(
       job.asset,
       ['function symbol() view returns (string)', 'function decimals() view returns (uint8)'],
-      provider,
+      makeProvider(url, chainId),
     )
-    const [symbol, decimals] = await Promise.all([erc20.symbol(), erc20.decimals()])
+    const [symbol, decimals] = await withRpcTimeout(Promise.all([erc20.symbol(), erc20.decimals()]), url)
     return { symbol, decimals: Number(decimals) }
   } catch {
     return { symbol: '', decimals: null }
@@ -71,8 +71,8 @@ export function fmtUnits(value, meta) {
 const ESCROW_ABI = ['function disputed() view returns (bool)', 'function raiseDispute()']
 
 export async function escrowDisputed(sdk, escrowAddress, chainId) {
-  const provider = new ethers.JsonRpcProvider(await resolveRpcUrl(sdk, chainId))
-  return new ethers.Contract(escrowAddress, ESCROW_ABI, provider).disputed()
+  const url = await resolveRpcUrl(sdk, chainId)
+  return withRpcTimeout(new ethers.Contract(escrowAddress, ESCROW_ABI, makeProvider(url, chainId)).disputed(), url)
 }
 
 // The same payload the API returns from POST /v1/job-issues: raiseDispute() on the escrow.

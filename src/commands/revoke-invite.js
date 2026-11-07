@@ -12,11 +12,27 @@ export async function run(argv) {
 
   const config = resolveConfig(values)
   const { sdk } = await cliInit(config)
-  sdkOk(await sdk.job.cancelInvite(jobId, inviteeId), 'job.cancelInvite')
-  if (config.json) return out({ ok: true, jobId, inviteeId, status: 'cancelled' })
+  const result = sdkOk(await sdk.job.cancelInvite(jobId, inviteeId), 'job.cancelInvite')
+  // A platform-created escrow can't be re-pointed to a new invitee, so the API cancels the job
+  // and refunds the deposit at once (autoCancelled) instead of leaving it bound to the old one.
+  const autoCancelled = Boolean(result?.autoCancelled)
+  const refundTxHash = result?.refundTxHash ?? null
+  const refundPending = Boolean(result?.refundPending)
+  if (config.json)
+    return out({
+      ok: true,
+      jobId,
+      inviteeId,
+      status: 'cancelled',
+      autoCancelled,
+      ...(autoCancelled ? { jobStatus: result?.job?.status ?? 'cancelled', refundTxHash, refundPending } : {}),
+    })
   print(`Revoked the invitation of ${inviteeId} to job ${jobId}.`)
-  note(
-    'Invite someone else with: psilocli create-job --resume <jobId> --invite-id <userId>. ' +
-      'If the escrow was created by the platform it stays bound to the previous invitee; then cancel-job refunds the deposit.',
-  )
+  if (autoCancelled) {
+    print(`Job cancelled — the escrow could not be re-pointed, so the deposit is refunded. Job status: ${result?.job?.status ?? 'cancelled'}`)
+    if (refundTxHash) print(`Refund tx:  ${refundTxHash}`)
+    else if (refundPending) print('Refund:     pending — the server will retry the on-chain refund; check `psilocli job`')
+    return
+  }
+  note('Invite someone else with: psilocli create-job --resume <jobId> --invite-id <userId>.')
 }

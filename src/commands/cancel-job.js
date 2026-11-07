@@ -44,7 +44,8 @@ export async function run(argv) {
 
   if (noSeller) {
     const preview = describeRefund(existing?.refund)
-    note(`No seller has accepted this job, so the cancellation takes effect now${preview ? `: ${preview}` : ''}`)
+    // A preview: the API decides (an open job with no invite may still be refused by older servers).
+    note(`If no seller has accepted, the cancellation takes effect immediately${preview ? `: ${preview}` : ''}`)
   }
 
   const result = sdkOk(

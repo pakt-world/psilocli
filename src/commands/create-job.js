@@ -23,6 +23,17 @@ const DEFAULTS = {
     'Send the buyer a message confirming job acceptance and your readiness to deliver.',
 }
 
+function validateDeposit(sdk, jobId) {
+  return sdk.job
+    .validatePayment(jobId, {
+      onRetry: ({ attempt, attempts, message }) =>
+        note(`validatePayment attempt ${attempt}/${attempts} failed: ${message}`),
+    })
+    .then((res) => sdkOk(res, 'validatePayment'))
+}
+
+const ALREADY_INVITED = /already been invited/i
+
 async function resolveUserIdByAddress(sdk, address) {
   const result = sdkOk(await sdk.user.getUserByWalletAddress(address), 'user.getUserByWalletAddress')
   const userId = result?._id
@@ -133,7 +144,7 @@ export async function createJobAndInvite(sdk, config, inviteeAddress, params, in
   return { jobId, inviteeAddress, inviteeUserId }
 }
 
-async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null, inviteeIdDirect = null) {
+export async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null, inviteeIdDirect = null) {
   note('WARNING: Multi-step on-chain flow (~60s). Do not interrupt or wrap in a timeout.')
 
   const jobData = sdkOk(await sdk.job.getById(jobId), 'job.getById')
@@ -166,16 +177,17 @@ async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null,
       note(`Deposit tx confirmed — txHash: ${depositTxHash}`)
     }
 
-    sdkOk(
-      await sdk.job.validatePayment(jobId, {
-        onRetry: ({ attempt, attempts, message }) =>
-          note(`validatePayment attempt ${attempt}/${attempts} failed: ${message}`),
-      }),
-      'validatePayment',
-    )
+    await validateDeposit(sdk, jobId)
     note('Escrow funded and validated')
-  } else {
+  } else if (['ongoing', 'review', 'completed'].includes(job.status)) {
     note('Escrow already funded — skipping deposit step')
+  } else {
+    // The deposit landed but the process may have died before validatePayment ran, leaving
+    // escrowPaid false: the API then refuses every invite with "Escrow has not been funded yet".
+    // Validation is idempotent, so run it again before inviting.
+    note('Escrow already funded — skipping deposit step; validating the deposit with the API...')
+    await validateDeposit(sdk, jobId)
+    note('Escrow funded and validated')
   }
 
   // If invite was already accepted, nothing left to do.
@@ -200,10 +212,26 @@ async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride = null,
   }
   const inviteRef = inviteeAddress ?? inviteeUserId
   note(`Inviting ${inviteRef} (userId: ${inviteeUserId}) to job ${jobId}...`)
-  const inviteData = sdkOk(
-    await sdk.job.inviteTalent(jobId, { inviteeId: inviteeUserId }),
-    'inviteTalent',
-  )
+  let inviteData
+  try {
+    inviteData = sdkOk(
+      await sdk.job.inviteTalent(jobId, { inviteeId: inviteeUserId }),
+      'inviteTalent',
+    )
+  } catch (err) {
+    if (!ALREADY_INVITED.test(err.message)) throw err
+    // An earlier run already sent this invite: the resume is done, report what is there.
+    const invites = await sdk.job.getInvites(jobId).then((r) => sdkOk(r, 'job.getInvites')).catch(() => null)
+    const existing = (Array.isArray(invites) ? invites : []).find(
+      (i) => String(i.inviteeId ?? i.receiver?._id ?? i.receiver ?? '') === String(inviteeUserId),
+    )
+    note(
+      `${inviteRef} was already invited to job ${jobId}` +
+        (existing ? ` (invite ${existing.status ?? 'pending'}${existing.createdAt ? `, sent ${existing.createdAt}` : ''})` : '') +
+        ' — nothing to resend.',
+    )
+    return { jobId, resumed: true, alreadyInvited: true, inviteeUserId, inviteStatus: existing?.status ?? 'pending' }
+  }
 
   if (inviteData?.invitePayload) {
     const tx = inviteData.invitePayload
