@@ -228,5 +228,11 @@ command
   })
   .catch((err) => {
     process.stderr.write(`Error: ${err.message || err.code || String(err)}\n`)
-    process.exitCode = 1
+    // Exit now rather than set exitCode: a request abandoned by a timeout (a black-holed RPC)
+    // keeps its socket open and would hold the process for the OS connect timeout, ~75 s
+    // (E2E F14b). Wait for stdout/stderr to flush first so piped output is not cut short.
+    let pending = 2
+    const done = () => --pending === 0 && process.exit(1)
+    process.stdout.write('', done)
+    process.stderr.write('', done)
   })

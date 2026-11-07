@@ -514,6 +514,10 @@ The shared logic is in `src/issues.js`.
      file and do not retry. Any other error keeps the file for `--resume`.
   4. Delete the file once the reveal lands.
 
+  `--resume` with no saved vote reads the caller's seat (`issue.get`): a revealed
+  seat returns `{ revealed: true, alreadyRevealed: true }` (exit 0); otherwise it
+  fails with "No saved vote".
+
   On commit or reveal, an "excused" refusal (two verdicts agreed before this
   one) or "Votes are not open" (older servers) ends the vote: the file is
   deleted and `{ closed: true, excused }` is returned, since it can never land.

@@ -154,7 +154,7 @@ async function vote(argv) {
   const result = await castVote(
     sdk,
     issueId,
-    { verdict: values.verdict, rationale, resume: Boolean(values.resume) },
+    { verdict: values.verdict, rationale, resume: Boolean(values.resume), userId },
     voteStore(),
     note,
   )

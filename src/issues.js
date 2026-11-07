@@ -122,6 +122,18 @@ function closeVote(store, issueId, msg) {
 }
 const isError = (res) => !res || res.status === 'error'
 
+/** The caller's live (not replaced) seat on an issue, or null when it cannot be read. */
+async function ownSeat(sdk, issueId, userId) {
+  if (!userId) return null
+  try {
+    const res = await sdk.issue.get(issueId)
+    if (isError(res)) return null
+    return (res.data?.panel ?? []).find((s) => String(s.jurorId) === String(userId) && !s.replaced) ?? null
+  } catch {
+    return null
+  }
+}
+
 /**
  * `jury vote`: commit then reveal, resumable. Steps:
  *   1. a saved vote for this issue wins over new flags (a commit may already be on record);
@@ -132,9 +144,14 @@ const isError = (res) => !res || res.status === 'error'
  *   5. on success remove the vote file.
  * Returns the reveal result; throws with a message fit for the user otherwise.
  */
-export async function castVote(sdk, issueId, { verdict, rationale, resume = false }, store, log = () => {}) {
+export async function castVote(sdk, issueId, { verdict, rationale, resume = false, userId }, store, log = () => {}) {
   let vote = store.load(issueId)
   if (resume && !vote) {
+    // The vote file is removed once the reveal lands, so a resume after a crash between the
+    // reveal and the clean-up, or a second resume, finds nothing. Ask the server before
+    // failing: a revealed seat is done (E2E F19).
+    const seat = await ownSeat(sdk, issueId, userId)
+    if (seat?.revealed) return { revealed: true, alreadyRevealed: true }
     throw new Error(`No saved vote for issue ${issueId} at ${store.path(issueId)}; nothing to resume.`)
   }
   if (vote && !resume && (vote.verdict !== verdict || vote.rationale !== rationale)) {

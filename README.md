@@ -265,6 +265,8 @@ psilocli rewards            # $PAKT juror rewards / rebates waiting to be claime
 committing and removes it after the reveal lands. If it is interrupted, run
 `jury vote <issueId> --resume`. If two verdicts agree before yours, your seat is
 excused: the command says so and removes the saved vote, since it can no longer land.
+A `--resume` with no saved vote asks the server: if your reveal already landed it
+says so and exits 0.
 
 ## Archiving a job
 
