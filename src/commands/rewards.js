@@ -1,7 +1,7 @@
 import { ethers } from 'ethers'
 import { parseCommand, resolveConfig } from '../config.js'
 import { cliInit } from '../client.js'
-import { resolveRpc, fetchAvailableChains } from '../chains.js'
+import { resolveRpc, fetchAvailableChains, makeProvider, withRpcTimeout } from '../chains.js'
 import { out, print, note, fail } from '../output.js'
 
 export const usage = `psilocli rewards [--chain <id>]
@@ -24,9 +24,9 @@ async function locate(sdk, chainId) {
   const rpc = await resolveRpc(sdk, chainId)
   const chain = (await fetchAvailableChains(sdk)).find((c) => String(c.chainId) === rpc.chainId)
   if (!chain?.factoryAddress) throw new Error(`Chain ${rpc.chainId} has no escrow factory configured.`)
-  const provider = new ethers.JsonRpcProvider(rpc.url)
+  const provider = makeProvider(rpc.url, rpc.chainId)
   const at = (address) => new ethers.Contract(address, ABI, provider)
-  const vault = await at(chain.factoryAddress).feeVault()
+  const vault = await withRpcTimeout(at(chain.factoryAddress).feeVault(), rpc.url)
   if (vault === ethers.ZeroAddress) throw new Error(`The escrow factory on chain ${rpc.chainId} has no fee vault.`)
   const purchaser = await at(vault).purchaser()
   if (purchaser === ethers.ZeroAddress) throw new Error(`The fee vault on chain ${rpc.chainId} has no $PAKT purchaser yet.`)

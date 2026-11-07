@@ -59,6 +59,53 @@ export async function resolveRpcUrl(sdk, chainId) {
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 
+const DEFAULT_RPC_TIMEOUT_MS = 15_000
+
+export function rpcTimeoutMs() {
+  const n = Number(process.env.PSILOCLI_RPC_TIMEOUT_MS)
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_RPC_TIMEOUT_MS
+}
+
+// A provider pinned to a known chain. Without a static network ethers probes eth_chainId first
+// and, when the RPC is down, retries that probe forever ("failed to detect network") instead of
+// rejecting, so no caller's .catch ever runs.
+export function makeProvider(url, chainId) {
+  const network = chainId != null && chainId !== '' ? Number(chainId) : undefined
+  return network
+    ? new ethers.JsonRpcProvider(url, network, { staticNetwork: true })
+    : new ethers.JsonRpcProvider(url)
+}
+
+// Rejects with "RPC <url> unreachable" when `promise` has not settled within the RPC timeout
+// (PSILOCLI_RPC_TIMEOUT_MS, default 15 s). Wrap the first read made through a provider in it.
+export function withRpcTimeout(promise, url, ms = rpcTimeoutMs()) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`RPC ${url} unreachable (no answer within ${ms} ms; set PSILOCLI_RPC_TIMEOUT_MS or pass --rpc <url>)`)),
+      ms,
+    )
+  })
+  return Promise.race([
+    Promise.resolve(promise).catch((err) => {
+      throw new Error(`RPC ${url} unreachable: ${err?.shortMessage ?? err?.message ?? err}`)
+    }),
+    timeout,
+  ]).finally(() => clearTimeout(timer))
+}
+
+// A provider whose RPC answered once (getBlockNumber) within the timeout.
+export async function connectProvider(url, chainId) {
+  const provider = makeProvider(url, chainId)
+  try {
+    await withRpcTimeout(provider.getBlockNumber(), url)
+  } catch (err) {
+    provider.destroy()
+    throw err
+  }
+  return provider
+}
+
 // Signs an unsigned tx payload returned by the Paktsuite API and waits for
 // one confirmation.
 export async function signAndBroadcast(sdk, key, txPayload, rpcOverride = null) {
@@ -69,7 +116,7 @@ export async function signAndBroadcast(sdk, key, txPayload, rpcOverride = null) 
     )
   }
   const rpcUrl = rpcOverride ?? await resolveRpcUrl(sdk, txPayload.chainId)
-  const provider = new ethers.JsonRpcProvider(rpcUrl)
+  const provider = await connectProvider(rpcUrl, txPayload.chainId)
   const wallet = new ethers.Wallet(key, provider)
   const tx = await wallet.sendTransaction({
     to: txPayload.to,
@@ -115,9 +162,17 @@ const RELEASE_ABI = [
 // but its confirmTx never ran (a killed process). `txHash` comes from the escrow's Released event
 // in the last `lookback` blocks (public RPCs cap log ranges near 10k); null when it is older.
 export async function escrowRelease(sdk, escrowAddress, chainId, rpcOverride = null, lookback = 9_000) {
-  const provider = new ethers.JsonRpcProvider(rpcOverride ?? (await resolveRpcUrl(sdk, chainId)))
+  const url = rpcOverride ?? (await resolveRpcUrl(sdk, chainId))
+  const provider = makeProvider(url, chainId)
   const escrow = new ethers.Contract(escrowAddress, RELEASE_ABI, provider)
-  if (!(await escrow.released())) return { released: false, txHash: null }
+  let released
+  try {
+    released = await withRpcTimeout(escrow.released(), url)
+  } catch (err) {
+    provider.destroy()
+    throw err
+  }
+  if (!released) return { released: false, txHash: null }
   const latest = await provider.getBlockNumber()
   const logs = await escrow
     .queryFilter(escrow.filters.Released(), Math.max(0, latest - lookback), latest)
@@ -125,10 +180,36 @@ export async function escrowRelease(sdk, escrowAddress, chainId, rpcOverride = n
   return { released: true, txHash: logs.at(-1)?.transactionHash ?? null }
 }
 
+const READY_ABI = [
+  'function readyForRelease() view returns (bool)',
+  'event ReadyForRelease(address indexed seller)',
+]
+
+// Whether the seller already marked the escrow ready, read on chain (same shape as escrowRelease).
+// `txHash` is the escrow's latest ReadyForRelease event in the last `lookback` blocks, or null.
+export async function escrowReady(sdk, escrowAddress, chainId, rpcOverride = null, lookback = 9_000) {
+  const url = rpcOverride ?? (await resolveRpcUrl(sdk, chainId))
+  const provider = makeProvider(url, chainId)
+  const escrow = new ethers.Contract(escrowAddress, READY_ABI, provider)
+  let ready
+  try {
+    ready = await withRpcTimeout(escrow.readyForRelease(), url)
+  } catch (err) {
+    provider.destroy()
+    throw err
+  }
+  if (!ready) return { ready: false, txHash: null }
+  const latest = await provider.getBlockNumber()
+  const logs = await escrow
+    .queryFilter(escrow.filters.ReadyForRelease(), Math.max(0, latest - lookback), latest)
+    .catch(() => [])
+  return { ready: true, txHash: logs.at(-1)?.transactionHash ?? null }
+}
+
 // Reads ERC-20 balance, symbol and decimals directly from the token contract.
 export async function readTokenBalance(sdk, contractAddress, chainId, address) {
   const rpcUrl = await resolveRpcUrl(sdk, chainId)
-  const provider = new ethers.JsonRpcProvider(rpcUrl)
+  const provider = makeProvider(rpcUrl, chainId)
   const erc20 = new ethers.Contract(
     contractAddress,
     [
@@ -138,10 +219,9 @@ export async function readTokenBalance(sdk, contractAddress, chainId, address) {
     ],
     provider,
   )
-  const [balance, symbol, decimals] = await Promise.all([
-    erc20.balanceOf(address),
-    erc20.symbol(),
-    erc20.decimals(),
-  ])
+  const [balance, symbol, decimals] = await withRpcTimeout(
+    Promise.all([erc20.balanceOf(address), erc20.symbol(), erc20.decimals()]),
+    rpcUrl,
+  )
   return { formatted: ethers.formatUnits(balance, Number(decimals)), symbol }
 }

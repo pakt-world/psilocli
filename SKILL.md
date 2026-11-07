@@ -263,14 +263,18 @@ create-job --resume <jobId>:        (crash recovery)
   job.getById(jobId)               check status ≠ cancelled/completed
   job.getEscrowStatus(jobId)       → onChain.deposited?
     false → resume from makeDeposit + sign + validatePayment
-    true  → skip deposit
+    true  → skip deposit; on a job not yet ongoing/review/completed, job.validatePayment again
+            (idempotent; a kill before it left escrowPaid false and every invite refused)
   if status not ongoing/review/completed → inviteTalent (needs --invite)
+    "Talent has already been invited to this job" → success: job.getInvites, print its status
 
 cancel-job:
   job.getCancelRequest(jobId)      pre-flight: reject if already pending — except on an `open`
                                    job: no seller accepted, so the server cancels and refunds
                                    at once (autoResolved, refundTxHash), even over an old
                                    pending request
+                                   the "takes effect immediately" note is a preview printed
+                                   before the API answers; "Cancelled" only on autoResolved
   job.requestCancel(jobId, dto)    refused on a `review` job: the buyer must release or open an
                                    issue; only the seller can return the funds (refund-job)
 
@@ -282,7 +286,10 @@ refund-job (seller):               partyRole must be seller; getCancelRequest �
 create-job --open:                 create + fund, no invite (isPrivate: false)
 applications list|accept|reject:   job.listApplications / acceptApplication / rejectApplication
                                    (accept invites the applicant and rejects the rest)
-revoke-invite:                     job.cancelInvite(jobId, inviteeId)
+revoke-invite:                     job.cancelInvite(jobId, inviteeId); a platform-created escrow
+                                   that cannot be re-pointed comes back autoCancelled (job
+                                   cancelled, deposit refunded): prints refundTxHash or
+                                   refundPending
 
 archive-job:
   job.getById(jobId)               pre-flight: status must be completed/cancelled/open
@@ -304,7 +311,11 @@ archive-job:
                            job.getById                      pre-flight: seller check, status must be ongoing
                            toggleDeliverableProgress each
                            job.completeJob(jobId)
-                           sign markReadyPayload → confirmTx onMarkReady (6×10s)
+                           escrowReady() (chains.js): readyForRelease() on chain; if already
+                           true (a markReady whose confirmTx never ran), its ReadyForRelease
+                           event in the last 9,000 blocks (or --tx <hash>) → confirmTx
+                           onMarkReady, nothing signed
+                           else sign markReadyPayload → confirmTx onMarkReady (6×10s)
 release-payment:
   job.getById(jobId)               pre-flight: status must be review, escrow not released
   escrowRelease() (chains.js)      on-chain released(); if already released (a release whose
@@ -492,6 +503,10 @@ The shared logic is in `src/issues.js`.
   issue for the plaintiff with `decidedBy: "default"`, no panel, and pays out.
   `issue show` then prints "decided by default". The CLI only words this; the
   limit lives on the server.
+- **`issue show`:** prints each seat's `rationale` when the API returns it (it
+  does once the issue resolves, or to the seat's own juror). Before payout it
+  prints the "If settled: …" preview; once `settlement.status === "settled"` it
+  prints "Settled: winner (<verdict>) received …" instead.
 - **`jury vote`:** `castVote()` is a resumable state machine:
   1. Save the vote file (mode 600).
   2. Commit. A 409 "Already committed" with a saved vote is the resume case.
@@ -519,6 +534,14 @@ The shared logic is in `src/issues.js`.
   Useful when `publicRpcUrls[0]` is rate-limited (e.g. Tenderly free tier).
   Every command that calls `signAndBroadcast` exposes `--rpc`: `create-job`
   (incl. `--resume`), `accept-invite`, `complete-job`, `release-payment`.
+- Every provider is built by `makeProvider(url, chainId)` as
+  `new ethers.JsonRpcProvider(url, chainId, { staticNetwork: true })`, so
+  ethers never loops on network detection. The first read goes through
+  `withRpcTimeout()` (`PSILOCLI_RPC_TIMEOUT_MS`, default 15000), which rejects
+  with "RPC <url> unreachable": `signAndBroadcast` fails fast and the
+  `.catch` fallbacks around `escrowRelease` / `escrowReady` run. Tested in
+  `test/chains.test.js` against `http://127.0.0.1:1` and a server that never
+  answers; `create-job --resume` is tested in `test/create-job-resume.test.js`.
 - Signs with `ethers.Wallet`, sends, and **waits one confirmation**
   (`tx.wait()`), so callers never need blind sleeps after it returns.
 - API tx payloads are unsigned `{ to, data, value, gas, maxFeePerGas,
@@ -620,6 +643,7 @@ flags are never sent so the API treats them as no-ops.
 | `-a, --address` | `AGENT_ADDRESS`     | required                        |
 | `-u, --url`     | `PAKTSUITE_URL`     | `https://devapi-psilo.kapt.xyz` |
 | `--json`        | —                   | off                             |
+| —               | `PSILOCLI_RPC_TIMEOUT_MS` | `15000`: RPC first-read timeout (ms) |
 
 `create-job` requires `--title` and honors these env var fallbacks:
 
