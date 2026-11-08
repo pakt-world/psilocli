@@ -155,3 +155,22 @@ test('raiseDisputePayload matches the API payload (raiseDispute() selector)', ()
   assert.equal(p.data, '0x6daa2d44')
   assert.equal(p.chainId, '84532')
 })
+
+test('castVote --resume with no saved vote reports a revealed seat as done (F19)', async () => {
+  const store = tmpStore()
+  const sdk = {
+    issue: {
+      get: async () => ok({ panel: [{ jurorId: 'old', replaced: true }, { jurorId: 'u1', revealed: true }] }),
+    },
+  }
+  const res = await castVote(sdk, 'i9', { resume: true, userId: 'u1' }, store)
+  assert.deepEqual(res, { revealed: true, alreadyRevealed: true })
+})
+
+test('castVote --resume with no saved vote and an unrevealed seat still fails', async () => {
+  const store = tmpStore()
+  const sdk = { issue: { get: async () => ok({ panel: [{ jurorId: 'u1', revealed: false }] }) } }
+  await assert.rejects(castVote(sdk, 'i9', { resume: true, userId: 'u1' }, store), /No saved vote/)
+  const failing = { issue: { get: async () => { throw new Error('down') } } }
+  await assert.rejects(castVote(failing, 'i9', { resume: true, userId: 'u1' }, store), /No saved vote/)
+})
