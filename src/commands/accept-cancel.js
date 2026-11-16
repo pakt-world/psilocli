@@ -15,7 +15,7 @@ export async function run(argv) {
   if (!jobId) fail(`Usage: ${usage}`, 2)
 
   const config = resolveConfig(values)
-  const { sdk } = await cliInit(config)
+  const { sdk, userId } = await cliInit(config)
 
   // Show the number BEFORE the buyer agrees: the server reads the escrow's own
   // fee terms (5 or 15 bp by stage, capped at $1) so this is what the contract will pay out.
@@ -27,6 +27,9 @@ export async function run(argv) {
         ? `The latest cancel request on job ${jobId} is ${cr0.status}; nothing pending to accept.`
         : `No cancel request on job ${jobId}.`,
     )
+  // The server refuses this too; checking first keeps a refund preview from implying it will happen.
+  if (userId && String(cr0.requestedBy?._id ?? cr0.requestedBy) === String(userId))
+    fail(`You made this cancel request, so the other party must accept or decline it.`)
   const preview = describeRefund(pending?.refund)
   if (preview) note(`Accepting ${preview}`)
   else note('Accepting cancellation (no funded escrow to refund, or fee preview unavailable)')
