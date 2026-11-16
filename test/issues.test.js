@@ -4,7 +4,7 @@ import { mkdtempSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sha256Hex, voteCommitment } from '@pakt/psilo'
-import { castVote, disputedHint, partyRole, raiseDisputePayload, voteStore } from '../src/issues.js'
+import { castVote, disputedHint, jurorSeatsLine, partyRole, raiseDisputePayload, voteStore } from '../src/issues.js'
 
 const ok = (data) => ({ status: 'success', data })
 const err = (message) => ({ status: 'error', data: null, message: [message] })
@@ -173,4 +173,40 @@ test('castVote --resume with no saved vote and an unrevealed seat still fails', 
   await assert.rejects(castVote(sdk, 'i9', { resume: true, userId: 'u1' }, store), /No saved vote/)
   const failing = { issue: { get: async () => { throw new Error('down') } } }
   await assert.rejects(castVote(failing, 'i9', { resume: true, userId: 'u1' }, store), /No saved vote/)
+})
+
+// The shape a party gets for the dev issue of 2026-11-16 right after sealing: invites hidden.
+const sealed = (over = {}) => ({
+  status: 'in_review',
+  sealedAt: '2026-11-16T15:59:56.878Z',
+  overseerExtensions: 0,
+  panel: [{ seat: 0, isOverseer: true, seatedAt: '2026-11-16T15:59:56.878Z', verdictDeadline: '2026-11-16T16:29:56.878Z', revealed: true }],
+  ...over,
+})
+
+test('jurorSeatsLine: invites outstanding names the time they lapse', () => {
+  const line = jurorSeatsLine(sealed(), 2, new Date('2026-11-16T16:10:00Z'))
+  assert.match(line, /^0 of 2 seated; invited at 2026-11-16 15:59 UTC\. Invites no one accepts by 2026-11-16 16:29 lapse/)
+})
+
+test('jurorSeatsLine: after the window it says the next draw is seated at the next check', () => {
+  const line = jurorSeatsLine(sealed(), 2, new Date('2026-11-16T16:31:00Z'))
+  assert.match(line, /^0 of 2 seated; no invitee accepted by 2026-11-16 16:29 UTC\. The next agents in the draw are seated/)
+})
+
+test('jurorSeatsLine: an extended Overseer deadline is not taken for the invite window', () => {
+  const issue = sealed({
+    overseerExtensions: 1,
+    panel: [{ seat: 0, isOverseer: true, seatedAt: '2026-11-16T15:59:56.878Z', verdictDeadline: '2026-11-16T17:40:00.000Z' }],
+  })
+  const line = jurorSeatsLine(issue, 2, new Date('2026-11-16T16:10:00Z'))
+  assert.match(line, /^0 of 2 seated; no invitee accepted\. /)
+})
+
+test('jurorSeatsLine: silent once the panel is full, resolved, or paused', () => {
+  const seat = (n) => ({ seat: n, isOverseer: false, seatedAt: '2026-11-16T16:30:00Z', verdictDeadline: '2026-11-16T17:00:00Z' })
+  assert.equal(jurorSeatsLine(sealed({ status: 'pending_jury_verdicts', panel: [...sealed().panel, seat(1), seat(2)] }), 2), '')
+  assert.equal(jurorSeatsLine(sealed({ status: 'resolved' }), 2), '')
+  assert.equal(jurorSeatsLine(sealed({ poolExhausted: true }), 2), '')
+  assert.equal(jurorSeatsLine({ status: 'submitted', panel: [] }, 2), '')
 })

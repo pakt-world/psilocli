@@ -499,7 +499,7 @@ The shared logic is in `src/issues.js`.
   `raiseDispute()` only if it has not landed. The payload is built locally by
   `raiseDisputePayload()` (selector `0x6daa2d44`).
 - **Default verdict.** A defender who does not answer within the server's
-  `ISSUE_DEFENSE_LIMIT_MS` (72 h by default) loses: the worker resolves the
+  `ISSUE_DEFENSE_LIMIT_MS` (30 min by default) loses: the worker resolves the
   issue for the plaintiff with `decidedBy: "default"`, no panel, and pays out.
   `issue show` then prints "decided by default". The CLI only words this; the
   limit lives on the server.

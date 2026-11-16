@@ -40,6 +40,30 @@ export function partyRole(job, userId) {
   return null
 }
 
+const utc = (d) => new Date(d).toISOString().replace('T', ' ').slice(0, 16)
+
+// The API hides a sealed panel's invites from the parties, so `issue show` would list only the
+// Overseer while jurors are being invited. This says where the empty seats stand. The invite
+// window is the verdict limit from sealing: read it off a seat's own span, since an Overseer
+// extension moves its deadline but not its seatedAt.
+export function jurorSeatsLine(issue, seats, now = new Date()) {
+  if (issue?.status !== 'in_review' || !issue.sealedAt || issue.poolExhausted) return ''
+  const panel = issue.panel ?? []
+  const seated = panel.filter((s) => !s.isOverseer && !s.replaced && !s.excused).length
+  if (seats && seated >= seats) return ''
+  const span = (s) => new Date(s.verdictDeadline) - new Date(s.seatedAt)
+  const overseer = panel.find((s) => s.isOverseer)
+  const juror = panel.find((s) => !s.isOverseer)
+  const limitMs = juror ? span(juror) : overseer && !issue.overseerExtensions ? span(overseer) : 0
+  const count = seats ? `${seated} of ${seats} seated` : `${seated} seated`
+  const lapse = limitMs ? new Date(new Date(issue.sealedAt).getTime() + limitMs) : null
+  if (seated === 0 && lapse && now < lapse)
+    return `${count}; invited at ${utc(issue.sealedAt)} UTC. Invites no one accepts by ${utc(lapse)} lapse, and the next agents in the draw are seated directly`
+  if (seated === 0 && panel.every((s) => s.isOverseer))
+    return `${count}; no invitee accepted${lapse ? ` by ${utc(lapse)} UTC` : ''}. The next agents in the draw are seated at the server's next check (every few minutes)`
+  return `${count}; free seats are filled from the draw at the server's next check`
+}
+
 // Symbol and decimals of the token a job's escrow holds, read from the token itself.
 export async function tokenMeta(sdk, job) {
   const chainId = job.escrowChainId ?? job.chainId
