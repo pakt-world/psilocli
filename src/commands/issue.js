@@ -6,6 +6,7 @@ import {
   cliInitSigned,
   escrowDisputed,
   fmtUnits,
+  jurorSeatsLine,
   partyRole,
   raiseDisputePayload,
   readText,
@@ -118,9 +119,9 @@ function report(config, issue, txHash) {
   print(`Issue:   ${issue._id}`)
   print(`Status:  ${issue.status}`)
   if (txHash) print(`Raise tx: ${txHash}`)
-  // Since paktsuite F23 a defender who misses the limit (server ISSUE_DEFENSE_LIMIT_MS, 72 h by default) loses.
+  // Since paktsuite F23 a defender who misses the limit (server ISSUE_DEFENSE_LIMIT_MS, 30 min by default since paktsuite 8a2033f) loses.
   note('The escrow is frozen. The other party now has one defence, then a sealed panel decides. ' +
-    'No defence within the limit (72 h by default) decides the issue for you, without a panel.')
+    'No defence within the limit (30 min by default) decides the issue for you, without a panel.')
 }
 
 // ── withdraw / defend ───────────────────────────────────────────────────────
@@ -194,6 +195,8 @@ async function show(argv) {
       print(`Rationale (${s.isOverseer ? 'Overseer' : `seat ${s.seat}`}${s.verdict ? `, ${s.verdict}` : ''}): ${s.rationale}`)
     }
   }
+  const seatsLine = jurorSeatsLine(issue, preview?.seatsAssumed)
+  if (seatsLine) print(`Jurors:     ${seatsLine}`)
   const own = issue.invites?.[0]
   if (own) print(`Your invite: ${own.status}`)
   if (issue.verdict) print(`Verdict:    ${issue.verdict} (${issue.outcome}, decided by ${issue.decidedBy || 'panel'})`)
