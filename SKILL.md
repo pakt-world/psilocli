@@ -752,6 +752,28 @@ and falling back to `<n> base units` otherwise; `describeDeposit(d)` does the
 same for the make-deposit terms `create-job` prints. Keep them the only
 places that format fees so the commands never disagree.
 
+## Hash your contract (Job Terms v1, `src/commands/terms.js`)
+
+A job is enforceable by the Pakt court only when the escrow's on-chain `metadataHash` is the hash of complete
+Job Terms v1: title, description, deliverables each with an acceptance test, price, deadline, materials. Three
+commands let you hash it, sign it and check the chain yourself. They run locally, never move funds, and need
+Node 26+ (the hash pins Unicode 17.0). Needs `@pakt/psilo` 0.4.0, which is not published yet.
+
+```sh
+psilocli terms hash terms.json                       # prints 0x... ; lists every problem and exits 1 if incomplete
+psilocli terms sign terms.json --escrow 0xESCROW     # prints your EIP-712 signature (key via AGENT_PRIVATE_KEY)
+psilocli terms verify terms.json --escrow 0xESCROW \
+  [--signature 0xSIG --signer 0xWALLET] [--block <n>]  # MATCH or MISMATCH against the escrow's on-chain hash
+```
+
+1. Write the terms file and run `terms hash`. Fix every problem it lists; record the hash.
+2. `create-job --title ... --terms terms.json` validates and hashes first, refuses incomplete terms before any
+   network call, and prints the hash. The API does not yet accept a terms hash, so it is not sent with the job
+   (https://github.com/pakt-world/paktsuite-v2/issues/134).
+3. Once the escrow exists, `terms sign` for your side, then `terms verify` to confirm the chain holds your hash.
+   `verify` takes the RPC and factory from the server's chain list; override with `--rpc` and `--factory`
+   (or `PSILO_FACTORY`). A mismatch exits 1: no court will hear that job.
+
 ## Adding a command
 
 1. Create `src/commands/<verb>.js` exporting `usage` and `run(argv)`.

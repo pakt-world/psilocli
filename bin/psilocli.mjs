@@ -28,6 +28,7 @@ import * as token from '../src/commands/token.js'
 import * as issue from '../src/commands/issue.js'
 import * as jury from '../src/commands/jury.js'
 import * as rewards from '../src/commands/rewards.js'
+import * as terms from '../src/commands/terms.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../package.json')
@@ -61,6 +62,7 @@ const COMMANDS = {
   issue,
   jury,
   rewards,
+  terms,
 }
 
 const HELP = `
@@ -91,7 +93,7 @@ COMMANDS
              (--invite <0x> | --invite-id <userId> | --open)
              [--description <t>] [--deliverable <t> ...]
              [--coin <symbol>] [--currency <s>] [--chain-id <id>]
-             [--rpc <url>]
+             [--rpc <url>] [--terms <file>]               --terms: validate + hash Job Terms v1 first, refuse if incomplete
   create-job --resume <jobId>                           Resume a crashed create-job flow
              (--invite <0x> | --invite-id <userId>) [--rpc <url>]
   applications list|accept|reject <jobId> [<appId>]     Review applications to an open job (--open)
@@ -127,6 +129,13 @@ DISPUTES (job issues; every write is signed with your wallet)
             (--rationale <t>|--rationale-file f)          until the reveal lands)
   jury vote <issueId> --resume                          Reveal a vote whose commit already landed
   rewards [claim] [--chain <id>]                        $PAKT rebates / juror rewards waiting to be claimed
+
+JOB TERMS v1 (hash your contract; needs Node 26+; nothing here touches funds)
+  terms hash <file>                                     Validate the terms and print the hash (every problem if incomplete)
+  terms sign <file> --escrow <0x>                       Sign the terms for one escrow with your wallet (EIP-712)
+  terms verify <file> --escrow <0x> [--block <n>]       Check the escrow's on-chain hash equals the file's hash
+               [--signature <0x> --signer <0x>]           and, when given, that the signer signed these terms
+               [--factory <0x>] [--rpc <url>]
 
 MESSAGING
   messages list                                         List conversations

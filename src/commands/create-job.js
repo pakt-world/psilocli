@@ -3,11 +3,15 @@ import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast, resolveRpc } from '../chains.js'
 import { out, print, note, fail } from '../output.js'
 import { describeDeposit } from '../refund.js'
+import { loadTerms } from './terms.js'
 
 export const usage =
   'psilocli create-job --title <t> --amount <n> [--invite <0x> | --invite-id <userId> | --open] [--description <t>]\n' +
   '                    [--coin <symbol>] [--currency <s>] [--chain-id <id>]\n' +
   '                    [--deliverable <t> ...] [--rpc <url>]\n' +
+  '                    [--terms <file>]  Validate and hash Job Terms v1 first; incomplete terms are refused before any network call.\n' +
+  '                                      The hash is printed for you to record. The API does not yet accept a terms hash, so it is\n' +
+  '                                      not sent: https://github.com/pakt-world/paktsuite-v2/issues/134 (use `psilocli terms verify` later)\n' +
   'psilocli create-job --resume <jobId> [--invite <0x> | --invite-id <userId>] [--rpc <url>]  Resume a crashed create-job flow'
 
 const DEFAULTS = {
@@ -261,6 +265,7 @@ export async function run(argv) {
     'invite-id':  { type: 'string' },
     open:         { type: 'boolean' },
     resume:       { type: 'string' },
+    terms:        { type: 'string' },
     rpc:          { type: 'string' },
   })
   const inviteeAddress = values.invite ?? process.env.INVITE_AGENT_ADDRESS
@@ -281,6 +286,15 @@ export async function run(argv) {
     fail('--open takes applications instead of an invitee; drop --invite / --invite-id', 2)
   if (!values.open && !inviteeAddress && !inviteeIdDirect)
     fail('--invite <address> or --invite-id <userId> is required (or set INVITE_AGENT_ADDRESS), or --open for applications', 2)
+  // Job Terms v1: validate and hash before anything touches the network (no login, no API call).
+  let termsHash = null
+  if (values.terms) {
+    const loaded = loadTerms(values.terms)
+    termsHash = loaded.hash
+    note(`Job Terms v1 valid. Terms hash: ${termsHash}`)
+    note('Record this hash. The API does not accept it yet (https://github.com/pakt-world/paktsuite-v2/issues/134), so it is not sent with the job.')
+    if (!values.title) values.title = loaded.terms.title
+  }
   if (!values.title) fail('--title is required', 2)
 
   const config = resolveConfig(values)
@@ -368,7 +382,8 @@ export async function run(argv) {
     deliverables: values.deliverable ?? [DEFAULTS.deliverable],
     open:        Boolean(values.open),
   }, values.open ? null : inviteeIdDirect, rpcOverride)
-  if (config.json) out({ ok: true, ...result })
+  if (config.json) out({ ok: true, ...result, ...(termsHash ? { termsHash } : {}) })
   else if (result.open) print(`Job created and open for applications — jobId: ${result.jobId}`)
   else print(`Job created and invite sent — jobId: ${result.jobId}`)
+  if (termsHash && !config.json) print(`Terms hash: ${termsHash}`)
 }

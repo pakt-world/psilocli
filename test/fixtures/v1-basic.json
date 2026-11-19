@@ -1,0 +1,98 @@
+{
+  "schema": "pakt.job-terms/1",
+  "title": "Landing page for a café",
+  "description": "One responsive page.\nCopy is supplied as \"brand-guide\"; tone: warm.",
+  "deliverables": [
+    {
+      "id": "page",
+      "description": "Static landing page with hero, menu and contact sections",
+      "acceptanceTest": {
+        "kind": "objective",
+        "image": "ghcr.io/validator/validator@sha256:a7446b374135ce30eb9b6ca764b180c48abe7bf74dd45b7f12f79874c276676b",
+        "platform": "linux/amd64",
+        "command": [
+          "java",
+          "-jar",
+          "/vnu.jar",
+          "--errors-only",
+          "/delivery/index.html"
+        ],
+        "inputs": [],
+        "timeoutSeconds": 120,
+        "expect": {
+          "exitCode": 0
+        }
+      },
+      "format": "Git repository, static HTML/CSS",
+      "quantity": 1
+    },
+    {
+      "id": "hero-images",
+      "description": "Hero images in the brand palette",
+      "acceptanceTest": {
+        "kind": "objective",
+        "image": "docker.io/library/python@sha256:d76f585fb0d5107dd47143da5e61554fd9cae656a30f3470f815cb8475769b6a",
+        "platform": "linux/amd64",
+        "command": [
+          "python3",
+          "/inputs/palette-check",
+          "/delivery/hero",
+          "/inputs/brand-guide"
+        ],
+        "inputs": [
+          "palette-check",
+          "brand-guide"
+        ],
+        "timeoutSeconds": 300,
+        "expect": {
+          "exitCode": 0
+        }
+      },
+      "format": "PNG, 1920x1080",
+      "quantity": 3
+    },
+    {
+      "id": "copy-tone",
+      "description": "Hero and menu copy",
+      "acceptanceTest": {
+        "kind": "stated",
+        "check": "The copy follows the tone section of the brand guide: warm, plain words, no superlatives."
+      },
+      "format": "Text in the page",
+      "quantity": 1
+    }
+  ],
+  "price": {
+    "amount": "500000000",
+    "token": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+    "chainId": 43114,
+    "decimals": 6
+  },
+  "deadline": 1798761600,
+  "materials": [
+    {
+      "id": "brand-guide",
+      "description": "Brand guide v3 (PDF)",
+      "sha256": "0xb928b26e5cf58005bd410753fc89a3b9d7aa80e7ef1f93f970f670dca3cd6d81",
+      "providedBy": "buyer",
+      "confidential": false
+    },
+    {
+      "id": "palette-check",
+      "description": "Script that exits 0 when every pixel colour is in the guide palette",
+      "sha256": "0x44cbf70b6f715c9850e6a76b2f34f2934289a4b13d7e2ca2d10dd08d99b05254",
+      "providedBy": "buyer",
+      "confidential": false
+    },
+    {
+      "id": "customer-list",
+      "description": "Customer list for the testimonials section",
+      "sha256": "0x594df4e996d62bbd659aefcc4b9555c8f10167759f2667b5b9445c2f8bb7ef1c",
+      "providedBy": "buyer",
+      "confidential": true
+    }
+  ],
+  "subcontractingAllowed": true,
+  "buildsOn": [],
+  "statuteSetSha256": "0xaeaa9cdb505e3b29fef262d49552a7828d870cb1845ecf47190126aab216b89d"
+}
