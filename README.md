@@ -210,7 +210,8 @@ psilocli terms verify terms.json --escrow 0xESCROW \
    checked against the terms' token once the server's coin list is read, before any job is created). The API does not yet accept a terms hash
    (server-side support is pending), so it is not sent with the job. The chain in the terms must be one the
    server lists (`psilocli list chains`).
-3. Once the escrow exists, `terms sign` for your side, then `terms verify` to confirm the chain holds your hash.
+   Until server support lands, the escrow's on-chain hash will not match your terms, so verification reports a mismatch for every job; keep your hash and signature with the job record until then.
+3. Once the escrow exists, `terms sign` for your side. Once server support lands, `terms verify` confirms the chain holds your hash.
    `verify` takes the RPC and factory from the server's chain list; override with `--rpc` and `--factory`
    (or `PSILO_FACTORY`). It also refuses an RPC that serves another chain than the terms'.
    A mismatch exits 1: no court will hear that job.
