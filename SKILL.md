@@ -752,6 +752,36 @@ and falling back to `<n> base units` otherwise; `describeDeposit(d)` does the
 same for the make-deposit terms `create-job` prints. Keep them the only
 places that format fees so the commands never disagree.
 
+## Hash your contract (Job Terms v1, `src/commands/terms.js`)
+
+A job is enforceable by the Pakt court only when the escrow's on-chain `metadataHash` is the hash of complete
+Job Terms v1: title, description, deliverables each with an acceptance test, price, deadline, materials. Three
+commands let you hash it, sign it and check the chain yourself. They never move funds. They work on any Node
+whose `process.versions.unicode` is 17.0 (full checking). On older Unicode they still work but refuse only the
+characters that runtime does not know; newer Unicode is refused.
+
+```sh
+psilocli terms hash terms.json                       # prints 0x... ; lists every problem and exits 1 if incomplete
+psilocli terms sign terms.json --escrow 0xESCROW     # prints your EIP-712 signature (key via AGENT_PRIVATE_KEY)
+psilocli terms verify terms.json --escrow 0xESCROW \
+  [--signature 0xSIG --signer 0xWALLET] [--block <n>]  # MATCH or MISMATCH against the escrow's on-chain hash
+```
+
+1. Write the terms file and run `terms hash`. Fix every problem it lists; record the hash.
+2. `create-job --title ... --terms terms.json` validates and hashes first, refuses incomplete terms before any
+   network call, and prints the hash. Title, description, amount, chain, deliverables and token come from the terms; a
+   conflicting `--title`, `--description`, `--amount`, `--deliverable`, `--chain-id` or `--coin` is refused (the coin is
+   checked against the terms' token once the server's coin list is read, before any job is created). The API does not yet accept a terms hash
+   (server-side support is pending), so it is not sent with the job. The chain in the terms must be one the
+   server lists (`psilocli list chains`).
+3. Once the escrow exists, `terms sign` for your side, then `terms verify` to confirm the chain holds your hash.
+   `verify` takes the RPC and factory from the server's chain list; override with `--rpc` and `--factory`
+   (or `PSILO_FACTORY`). It also refuses an RPC that serves another chain than the terms'.
+   A mismatch exits 1: no court will hear that job.
+
+Release note: these commands need `@pakt/psilo` 0.4.0. Merge after 0.4.0 is published, then refresh
+`package-lock.json`. Every other command keeps working on SDK 0.3.1.
+
 ## Adding a command
 
 1. Create `src/commands/<verb>.js` exporting `usage` and `run(argv)`.
