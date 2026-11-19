@@ -178,7 +178,7 @@ test('verify refuses an RPC that serves another chain than the terms', async () 
 test('create-job --terms refuses flags that disagree with the terms, before any network call', async () => {
   const srv = await countingServer()
   try {
-    for (const flags of [['--title', 'Something else'], ['--amount', '999'], ['--deliverable', 'another thing']]) {
+    for (const flags of [['--title', 'Something else'], ['--amount', '999'], ['--deliverable', 'another thing'], ['--description', 'other text']]) {
       const r = await cli(['create-job', '--open', '--terms', VECTOR, ...flags], { env: { PAKTSUITE_URL: srv.url } })
       assert.equal(r.code, 2, flags.join(' '))
       assert.match(r.stderr, /differs from the terms/)

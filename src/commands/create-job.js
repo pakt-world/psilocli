@@ -253,13 +253,14 @@ export async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride 
   return { jobId, resumed: true }
 }
 
-// With --terms, the job's title, amount, chain and deliverables come from the terms (what is hashed is what
-// is posted). A flag that says something else is refused rather than silently overridden.
+// With --terms, the job's title, description, amount, chain, deliverables and token (price.token, resolved to a
+// coin below) come from the terms (what is hashed is what is posted). A flag that says something else is refused rather than silently overridden.
 function termsDefaults(terms, values) {
   const amount = ethers.formatUnits(terms.price.amount, terms.price.decimals)
   const deliverables = terms.deliverables.map((d) => d.description)
   const chainId = String(terms.price.chainId)
   const clash = []
+  if (values.description != null && values.description !== terms.description) clash.push('--description differs from the terms description')
   if (values.title != null && values.title !== terms.title) clash.push(`--title "${values.title}" differs from the terms title "${terms.title}"`)
   if (values.amount != null && ethers.parseUnits(String(values.amount), terms.price.decimals) !== BigInt(terms.price.amount))
     clash.push(`--amount ${values.amount} differs from the terms price ${amount}`)
@@ -268,7 +269,16 @@ function termsDefaults(terms, values) {
   if (values['chain-id'] != null && String(values['chain-id']) !== chainId)
     clash.push(`--chain-id ${values['chain-id']} differs from the terms chain ${chainId}`)
   if (clash.length) fail(`--terms is the contract; drop the conflicting flags or fix the terms:\n  - ${clash.join('\n  - ')}`, 2)
-  return { title: terms.title, amount, deliverables, chainId }
+  return { title: terms.title, description: terms.description, amount, deliverables, chainId, token: String(terms.price.token).toLowerCase() }
+}
+
+const ZERO = '0x0000000000000000000000000000000000000000'
+
+// The token address a coin has on a chain ('' for the native coin).
+function coinToken(c, chainId) {
+  if (!c.isToken) return ZERO
+  const a = c.contractAddresses?.[String(chainId)] ?? (String(c.resolvedChainId ?? '') === String(chainId) ? c.contractAddress : '')
+  return String(a || '').toLowerCase()
 }
 
 export async function run(argv) {
@@ -331,7 +341,7 @@ export async function run(argv) {
   let chainId  = values['chain-id'] || fromTerms?.chainId || null
 
   const coinSymbol = values.coin ?? DEFAULTS.coin
-  if (coinSymbol) {
+  if (coinSymbol || fromTerms) {
     // Ask for the coin AS CONFIGURED ON THE TARGET CHAIN. Without a chainId the
     // server answers for its default chain, so the flattened `contractAddress`
     // it returns (and the note we print) would belong to that chain, not this
@@ -340,9 +350,15 @@ export async function run(argv) {
       await sdk.payment.fetchPaymentCoins(chainId ? { chainId: String(chainId) } : undefined),
       'payment.fetchPaymentCoins',
     )
-    const coin = (Array.isArray(allCoins) ? allCoins : []).find(
-      c => c.active && c.symbol.toLowerCase() === coinSymbol.toLowerCase(),
+    const coins = Array.isArray(allCoins) ? allCoins : []
+    // With --terms the token is the terms' price.token; without --coin the coin is found by that address.
+    const coin = coins.find((c) =>
+      c.active && (coinSymbol ? c.symbol.toLowerCase() === coinSymbol.toLowerCase() : coinToken(c, chainId) === fromTerms.token),
     )
+    if (fromTerms && coin && coinToken(coin, chainId) !== fromTerms.token)
+      fail(`--terms is the contract: --coin ${coinSymbol} is not the terms' token ${fromTerms.token}; drop --coin or fix the terms`, 2)
+    if (!coin && fromTerms && !coinSymbol)
+      fail(`The terms' token ${fromTerms.token} is not an active coin on chain ${chainId}; run "psilocli list coins --chain-id ${chainId}"`, 2)
     if (!coin)
       fail(
         `Coin "${coinSymbol}" not found or inactive${chainId ? ` on chain ${chainId}` : ''}.\n` +
@@ -396,7 +412,7 @@ export async function run(argv) {
   note('WARNING: Multi-step on-chain flow (~60s). Do not interrupt or wrap in a timeout.')
   const result = await createJobAndInvite(sdk, config, values.open ? null : inviteeAddress, {
     title:       values.title,
-    description: values.description ?? DEFAULTS.description,
+    description: fromTerms?.description ?? values.description ?? DEFAULTS.description,
     amount,
     currency,
     chainId,
