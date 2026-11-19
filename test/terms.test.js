@@ -105,6 +105,10 @@ test('create-job --terms refuses incomplete terms before any network call', asyn
     assert.notEqual(r.code, 0)
     assert.match(r.stderr, /acceptanceTest/)
     assert.deepEqual(srv.hits, [], 'no request may reach the API')
+    const resumed = await cli(['create-job', '--resume', 'job1', '--terms', f], { env: { PAKTSUITE_URL: srv.url } })
+    assert.notEqual(resumed.code, 0)
+    assert.match(resumed.stderr, /acceptanceTest/)
+    assert.deepEqual(srv.hits, [], 'the resume path must not reach the API either')
     // control: complete terms get past the check and then do reach the network
     const ok = await cli(['create-job', '--open', '--terms', VECTOR], { env: { PAKTSUITE_URL: srv.url } })
     assert.match(ok.stderr, new RegExp(EXPECTED))
@@ -148,5 +152,39 @@ test('sign then verify the signature; a one-byte change makes it invalid', async
     assert.match(bad.stdout, /SIGNATURE INVALID/)
   } finally {
     chain.server.close()
+  }
+})
+
+test('a malformed private key is never echoed', async () => {
+  const bad = 'not-a-hex-key-SENTINEL123'
+  const r = await cli(['terms', 'sign', VECTOR, '--escrow', ESCROW], { env: { AGENT_PRIVATE_KEY: bad } })
+  assert.notEqual(r.code, 0)
+  assert.match(r.stderr, /AGENT_PRIVATE_KEY is not a valid private key/)
+  assert.ok(!(r.stdout + r.stderr).includes('SENTINEL123'))
+})
+
+test('verify refuses an RPC that serves another chain than the terms', async () => {
+  const chain = await fakeChain(1, EXPECTED)
+  try {
+    const r = await cli(['terms', 'verify', VECTOR, '--escrow', ESCROW, '--factory', FACTORY, '--rpc', chain.url])
+    assert.notEqual(r.code, 0)
+    assert.ok(!/MATCH/.test(r.stdout))
+    assert.match(r.stderr, /serves chain 1/)
+  } finally {
+    chain.server.close()
+  }
+})
+
+test('create-job --terms refuses flags that disagree with the terms, before any network call', async () => {
+  const srv = await countingServer()
+  try {
+    for (const flags of [['--title', 'Something else'], ['--amount', '999'], ['--deliverable', 'another thing']]) {
+      const r = await cli(['create-job', '--open', '--terms', VECTOR, ...flags], { env: { PAKTSUITE_URL: srv.url } })
+      assert.equal(r.code, 2, flags.join(' '))
+      assert.match(r.stderr, /differs from the terms/)
+    }
+    assert.deepEqual(srv.hits, [])
+  } finally {
+    srv.server.close()
   }
 })

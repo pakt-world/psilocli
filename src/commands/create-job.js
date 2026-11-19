@@ -3,6 +3,7 @@ import { cliInit, sdkOk } from '../client.js'
 import { signAndBroadcast, resolveRpc } from '../chains.js'
 import { out, print, note, fail } from '../output.js'
 import { describeDeposit } from '../refund.js'
+import { ethers } from 'ethers'
 import { loadTerms } from './terms.js'
 
 export const usage =
@@ -11,7 +12,7 @@ export const usage =
   '                    [--deliverable <t> ...] [--rpc <url>]\n' +
   '                    [--terms <file>]  Validate and hash Job Terms v1 first; incomplete terms are refused before any network call.\n' +
   '                                      The hash is printed for you to record. The API does not yet accept a terms hash, so it is\n' +
-  '                                      not sent: https://github.com/pakt-world/paktsuite-v2/issues/134 (use `psilocli terms verify` later)\n' +
+  '                                      not sent (server-side support is pending); title, amount and deliverables come from the terms.\n' +
   'psilocli create-job --resume <jobId> [--invite <0x> | --invite-id <userId>] [--rpc <url>]  Resume a crashed create-job flow'
 
 const DEFAULTS = {
@@ -252,6 +253,24 @@ export async function resumeJob(sdk, config, jobId, inviteeAddress, rpcOverride 
   return { jobId, resumed: true }
 }
 
+// With --terms, the job's title, amount, chain and deliverables come from the terms (what is hashed is what
+// is posted). A flag that says something else is refused rather than silently overridden.
+function termsDefaults(terms, values) {
+  const amount = ethers.formatUnits(terms.price.amount, terms.price.decimals)
+  const deliverables = terms.deliverables.map((d) => d.description)
+  const chainId = String(terms.price.chainId)
+  const clash = []
+  if (values.title != null && values.title !== terms.title) clash.push(`--title "${values.title}" differs from the terms title "${terms.title}"`)
+  if (values.amount != null && ethers.parseUnits(String(values.amount), terms.price.decimals) !== BigInt(terms.price.amount))
+    clash.push(`--amount ${values.amount} differs from the terms price ${amount}`)
+  if (values.deliverable != null && JSON.stringify(values.deliverable) !== JSON.stringify(deliverables))
+    clash.push('--deliverable differs from the terms deliverables')
+  if (values['chain-id'] != null && String(values['chain-id']) !== chainId)
+    clash.push(`--chain-id ${values['chain-id']} differs from the terms chain ${chainId}`)
+  if (clash.length) fail(`--terms is the contract; drop the conflicting flags or fix the terms:\n  - ${clash.join('\n  - ')}`, 2)
+  return { title: terms.title, amount, deliverables, chainId }
+}
+
 export async function run(argv) {
   const { values } = parseCommand(argv, {
     title:        { type: 'string' },
@@ -272,6 +291,17 @@ export async function run(argv) {
   const inviteeIdDirect = values['invite-id'] ?? null
   const rpcOverride = values.rpc ?? null
 
+  // Job Terms v1: validate and hash first, on every path, before anything touches the network.
+  let termsHash = null
+  let fromTerms = null
+  if (values.terms) {
+    const loaded = await loadTerms(values.terms)
+    termsHash = loaded.hash
+    fromTerms = termsDefaults(loaded.terms, values)
+    note(`Job Terms v1 valid. Terms hash: ${termsHash}`)
+    note('Record this hash. Server-side support for it is pending, so it is not sent with the job.')
+  }
+
   // --resume: skip creation, pick up from the right checkpoint
   if (values.resume) {
     const config = resolveConfig(values)
@@ -286,15 +316,7 @@ export async function run(argv) {
     fail('--open takes applications instead of an invitee; drop --invite / --invite-id', 2)
   if (!values.open && !inviteeAddress && !inviteeIdDirect)
     fail('--invite <address> or --invite-id <userId> is required (or set INVITE_AGENT_ADDRESS), or --open for applications', 2)
-  // Job Terms v1: validate and hash before anything touches the network (no login, no API call).
-  let termsHash = null
-  if (values.terms) {
-    const loaded = loadTerms(values.terms)
-    termsHash = loaded.hash
-    note(`Job Terms v1 valid. Terms hash: ${termsHash}`)
-    note('Record this hash. The API does not accept it yet (https://github.com/pakt-world/paktsuite-v2/issues/134), so it is not sent with the job.')
-    if (!values.title) values.title = loaded.terms.title
-  }
+  if (!values.title && fromTerms) values.title = fromTerms.title
   if (!values.title) fail('--title is required', 2)
 
   const config = resolveConfig(values)
@@ -303,10 +325,10 @@ export async function run(argv) {
   // --- resolve coin → asset + currency + chainId ---
   // asset can only come from --coin below — there's no raw override, so it's
   // never at odds with the coin lookup (see PSILO-6).
-  const amount = values.amount ?? DEFAULTS.amount
+  const amount = fromTerms?.amount ?? values.amount ?? DEFAULTS.amount
   let asset    = ''
   let currency = values.currency ?? DEFAULTS.currency
-  let chainId  = values['chain-id'] || null
+  let chainId  = values['chain-id'] || fromTerms?.chainId || null
 
   const coinSymbol = values.coin ?? DEFAULTS.coin
   if (coinSymbol) {
@@ -379,7 +401,7 @@ export async function run(argv) {
     currency,
     chainId,
     asset,
-    deliverables: values.deliverable ?? [DEFAULTS.deliverable],
+    deliverables: fromTerms?.deliverables ?? values.deliverable ?? [DEFAULTS.deliverable],
     open:        Boolean(values.open),
   }, values.open ? null : inviteeIdDirect, rpcOverride)
   if (config.json) out({ ok: true, ...result, ...(termsHash ? { termsHash } : {}) })

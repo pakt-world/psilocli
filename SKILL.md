@@ -756,8 +756,9 @@ places that format fees so the commands never disagree.
 
 A job is enforceable by the Pakt court only when the escrow's on-chain `metadataHash` is the hash of complete
 Job Terms v1: title, description, deliverables each with an acceptance test, price, deadline, materials. Three
-commands let you hash it, sign it and check the chain yourself. They run locally, never move funds, and need
-Node 26+ (the hash pins Unicode 17.0). Needs `@pakt/psilo` 0.4.0, which is not published yet.
+commands let you hash it, sign it and check the chain yourself. They never move funds. They work on any Node
+whose `process.versions.unicode` is 17.0 (full checking). On older Unicode they still work but refuse only the
+characters that runtime does not know; newer Unicode is refused.
 
 ```sh
 psilocli terms hash terms.json                       # prints 0x... ; lists every problem and exits 1 if incomplete
@@ -768,11 +769,16 @@ psilocli terms verify terms.json --escrow 0xESCROW \
 
 1. Write the terms file and run `terms hash`. Fix every problem it lists; record the hash.
 2. `create-job --title ... --terms terms.json` validates and hashes first, refuses incomplete terms before any
-   network call, and prints the hash. The API does not yet accept a terms hash, so it is not sent with the job
-   (https://github.com/pakt-world/paktsuite-v2/issues/134).
+   network call, and prints the hash. Title, amount, chain and deliverables come from the terms; a conflicting
+   `--title`, `--amount`, `--deliverable` or `--chain-id` is refused. The API does not yet accept a terms hash
+   (server-side support is pending), so it is not sent with the job. The chain in the terms must be one the
+   server lists (`psilocli list chains`).
 3. Once the escrow exists, `terms sign` for your side, then `terms verify` to confirm the chain holds your hash.
    `verify` takes the RPC and factory from the server's chain list; override with `--rpc` and `--factory`
-   (or `PSILO_FACTORY`). A mismatch exits 1: no court will hear that job.
+   (or `PSILO_FACTORY`). It also refuses an RPC that serves another chain than the terms'.
+
+Release note: these commands need `@pakt/psilo` 0.4.0. Merge after 0.4.0 is published, then refresh
+`package-lock.json`. Every other command keeps working on SDK 0.3.1. A mismatch exits 1: no court will hear that job.
 
 ## Adding a command
 

@@ -130,7 +130,7 @@ DISPUTES (job issues; every write is signed with your wallet)
   jury vote <issueId> --resume                          Reveal a vote whose commit already landed
   rewards [claim] [--chain <id>]                        $PAKT rebates / juror rewards waiting to be claimed
 
-JOB TERMS v1 (hash your contract; needs Node 26+; nothing here touches funds)
+JOB TERMS v1 (hash your contract; needs @pakt/psilo 0.4.0; nothing here touches funds)
   terms hash <file>                                     Validate the terms and print the hash (every problem if incomplete)
   terms sign <file> --escrow <0x>                       Sign the terms for one escrow with your wallet (EIP-712)
   terms verify <file> --escrow <0x> [--block <n>]       Check the escrow's on-chain hash equals the file's hash
